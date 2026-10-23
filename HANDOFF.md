@@ -1,43 +1,59 @@
 # Handoff notes (2026-10-24)
 
-Development continues from this snapshot. State of the work:
+## Current state
 
-## Done
+Muse itself is already running. This repository adds its Slack bridge; do
+not confuse pending Slack integration with Muse runtime availability.
+The selected deployment is an existing shared workspace with one authorized
+owner. App existence may be visible to members; conversations and replies
+must remain owner-only. Match the existing private secretary app's settings.
+Actual app/workspace/channel/user IDs and deployment receipts live only in
+local ignored state, never in this file.
 
-- **Design** (`docs/design.md`): architecture, audience-based access control,
-  information governance (scope-tagged context domains, enforcement by
-  construction, opening gate with leak tests), safety rules, milestones.
-- **Slack app manifest** (`slack-app-manifest.yaml`): Socket Mode,
-  v1-minimum bot scopes/events.
-- **Recommended Slack-side settings** (`docs/slack-recommended-settings.yaml`):
-  what the manifest cannot express, incl. the stealth deployment profiles.
-- **M1 listener skeleton** (`bridge/`): config loader (YAML, rejects
-  credential-like keys), audience resolution gate, durable fsync'd queue
-  with cross-restart event dedupe, Socket Mode transport, listener
-  (envelope ack → gate → queue → ack reaction). Tokens are read from the
-  environment only.
-- **Tests** (`tests/test_bridge.py`): 10 offline tests, all passing
-  (`python3 -m unittest discover -s tests`). Cover owner/guest/stranger
-  gating, mention rules, per-audience channel allowlists, dedupe, scope
-  tagging, config validation.
-- systemd user service template (`deploy/muse-slack-bridge.service`).
+## Implemented and offline-verified
 
-## Next
+- M1 listener: audience gate, fsync'd queue, restart dedupe, bot-loop guard.
+  Group DMs are rejected, including messages from the owner.
+- M2 worker interface (`bridge/worker.py`, `docs/worker.md`): `next` claims
+  one owner event for the running Muse runtime; `reply` posts text to the
+  original channel/root thread. Current allowlists are rechecked at send.
+- Durable SQLite claims and delivery states prevent automatic duplicate
+  turns/posts. One active turn per thread; completed history stays scoped
+  to that thread. `pending`, `resume`, and explicit `reconcile` support
+  recovery. Uncertain network delivery stops instead of auto-resending.
+- Queue-based dedupe recovery covers a crash before the secondary seen-ID
+  file is flushed. Partial queue tails are preserved and block appends.
+- Matching Slack profile: Agent View, writable DM tab, Socket Mode, only
+  DM/private-channel bot events, read-only user observation scopes,
+  bot reply scopes, no distribution activation. No `reactions:write`;
+  example config sets `ackReaction: null`. User observation and advanced
+  Agent status/title interactions are not implemented by the bridge.
+- Offline checks: the original 10 listener/config checks plus 14 worker,
+  Web API, queue recovery and access-control checks passed. No live
+  Slack/Muse reply has been verified from this checkout.
 
-1. Create the Slack app from the manifest; generate the app-level token
-   (`connections:write`) and install the app (bot token). Register both via
-   the owner's secure flow — never in files.
-2. Live smoke test of the listener (M1 completion): owner DM lands in the
-   queue with a 👀 reaction; a non-audience message leaves no trace.
-3. M2: worker side — 5-second queue hook, agent turn, reply posting with
-   pinned targets and self-loop guard (see design, "Reply path").
-4. Remove the obsolete `config.example.json` (replaced by the YAML example).
+## Remaining acceptance and deployment
+
+1. Finish the selected Slack app's OAuth installation and dedicated
+   `connections:write` app-level token creation. Check local deployment
+   state for actual progress; never recreate an existing app blindly.
+2. Register bot/app credentials through the approved secure flow. Do not
+   store tokens in chat, tracked files, plaintext env files, logs or a unit.
+   The service template deliberately requires secure environment injection.
+3. Set local config to the single owner and only the approved owner-only
+   private channel. Confirm membership before allowing channel replies.
+4. Deploy on the running Muse agent VM and register its existing runtime's
+   five-second wake hook using `docs/worker.md`. The runtime integration
+   path is not yet established; the CLI is not an installed wake hook.
+5. Live proof: owner DM and private-channel message -> threaded Muse reply;
+   non-owner and group-DM event -> no queue record, reaction or reply.
+6. Keep guest audiences closed until M4 governance/leak tests are complete.
 
 ## Conventions
 
-- Local/machine-specific state (IDs, tokens, hostnames) never enters this
-  repository: real config lives in `.local/` (gitignored); see the design.
-- Human-facing configuration in this repo is YAML (Slack accepts YAML
-  manifests natively, and settings guidance needs comments).
-- The bridge is multi-audience capable by design; deployments decide who
-  is served purely through the audience registry in local config.
+- Local/machine-specific state and credentials never enter this public repo.
+- Human-facing config is YAML. `config.example.json` is a legacy artifact;
+  use the YAML example for the current profile.
+- Offline implementation, Slack app registration, installation, running
+  services, and end-to-end acceptance are distinct states. Report each
+  accurately. Public pushes require the owner's explicit publication GO.

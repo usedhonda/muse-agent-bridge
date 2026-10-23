@@ -1,6 +1,8 @@
 # Design
 
-Status: M0 (design only, nothing is running yet)
+Status: M1 listener and M2 worker interface implemented offline; live acceptance pending.
+The current Slack deployment profile matches the existing private secretary app.
+See `worker.md` for the implemented worker contract and deployment differences.
 
 ## Goal
 
@@ -17,8 +19,9 @@ everyone else (see "Access control" and "Deployment profiles"). Opening to
 guests later means changing local config and passing the opening gate,
 not redesigning the bridge.
 
-Non-goals for v1: file/media handling, slash commands, Slack Agent View /
-assistant surfaces, posting as the user. Group conversations with third
+Non-goals for v1: file/media handling, slash commands, posting as the user.
+Agent View is enabled in the matching Slack configuration; assistant-specific
+status/title APIs are not implemented yet. Group conversations with third
 parties are a capability of this design, enabled only per deployment
 config and the M4 opening gate.
 
@@ -184,7 +187,9 @@ in committed files, examples, fixtures, or docs.
 - Kill switch: disabling the wake hook and stopping the listener stops all
   behavior; revoking the app installation or either token disables the
   bridge entirely without affecting anything else on the VM.
-- The listener holds no authority beyond receiving events and posting the ack
+- Receipt reactions are optional and disabled in the matching secretary profile,
+  which omits `reactions:write`.
+- The listener holds no authority beyond receiving events and posting an enabled ack
   reaction. Composing and sending replies happens only inside a Muse turn.
 
 ## Setup sequence (operator steps, later milestones)

@@ -23,12 +23,21 @@ class EventStore:
                 for line in self.seen_path.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             }
+        # Recover the crash window between the queue fsync and seen-ID fsync.
+        self._seen.update(record["event_id"] for record in self.read_queue())
 
     def append(self, record: dict) -> bool:
         """Append a record; returns False (and writes nothing) on duplicate."""
         event_id = record["event_id"]
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("event_id must be a nonempty string")
         if event_id in self._seen:
             return False
+        if self.queue_path.exists() and self.queue_path.stat().st_size:
+            with self.queue_path.open("rb") as tail:
+                tail.seek(-1, 2)
+                if tail.read(1) != b"\n":
+                    raise ValueError("queue has an incomplete tail; recover before appending")
         with self.queue_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             fh.flush()
@@ -49,6 +58,6 @@ class EventStore:
             return []
         return [
             json.loads(line)
-            for line in self.queue_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            for line in self.queue_path.read_bytes().splitlines(keepends=True)
+            if line.endswith(b"\n") and line.strip()
         ]

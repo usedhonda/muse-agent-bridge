@@ -14,13 +14,15 @@ app:
     scopes: [connections:write] # the only app-level scope needed
   bot_user:
     display_name: Muse
-    always_online: true
+    always_online: false
+  agent_view: enabled # same Agent experience as the existing private secretary app
   app_home:
     home_tab: disabled
     messages_tab: enabled # required for DM with the bot
     messages_tab_read_only: false
   oauth:
-    user_scopes: [] # bot scopes only; never request user scopes
+    user_scopes: manifest # read-only observation scopes, matching the existing secretary app
+    # The bridge uses only the bot token; user observation is not implemented.
     redirect_urls: [] # Socket Mode installs need no redirect URL
 
 workspace_admin:
@@ -49,5 +51,5 @@ deployment_profiles:
     residual_visibility: none
 
 tokens:
-  storage: secure_connection_only # never in this repo, never in .local/ plain files beyond a 0600 env file
+  storage: secure_connection_only # never in this repo, never in .local/ plain files
   rotation: regenerate app/bot tokens in the app settings if exposure is suspected

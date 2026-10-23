@@ -6,7 +6,8 @@
 # rejected at load time.
 
 deployment: stealth-shared-workspace
-ackReaction: eyes
+# Matching profile omits reactions:write; set a reaction only after granting it.
+ackReaction: null
 hookPollIntervalSec: 5
 
 audiences:

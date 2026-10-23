@@ -36,7 +36,9 @@ def resolve_event(cfg: BridgeConfig, event: dict, bot_user_id: str) -> Decision:
     channel_type = event.get("channel_type") or (
         "im" if channel.startswith("D") else "channel"
     )
-    if channel_type in ("im", "mpim"):
+    if channel_type == "mpim":
+        return Decision(False, "group-dm-disabled")
+    if channel_type == "im":
         if not audience.dm_enabled:
             return Decision(False, "dm-disabled")
         return Decision(True, "dm", audience)

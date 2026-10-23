@@ -2,7 +2,7 @@
 
 Slack Socket Mode bridge that lets Muse (Meta personal agent) join Slack as a bot agent.
 
-Status: **M1 — listener skeleton implemented and offline-tested.** Live connection is pending Slack app creation.
+Status: **M1 listener and M2 worker interface are implemented and offline-tested.** Live Slack/Muse integration is still pending. See [HANDOFF.md](HANDOFF.md).
 
 ## What this is
 
@@ -11,8 +11,8 @@ A dedicated Slack app (bot identity) plus a small bridge on Muse's agent VM:
 - A Socket Mode listener receives DMs and mentions and writes them to a
   durable local queue.
 - A wake hook (5-second poll) starts a Muse turn; replies are posted as the
-  bot, in the originating thread. An ack reaction is posted on receipt, so
-  responses feel immediate (seconds, not minutes).
+  bot, in the originating thread. Receipt reactions are optional; the matching private secretary
+  deployment profile leaves them disabled.
 
 Modeled on OpenClaw's Slack channel (`openclaw/openclaw`,
 `extensions/slack/`, `docs/channels/slack/`), adapted to how Muse runs:
@@ -50,7 +50,7 @@ IDs, hostnames, or conversation content belong here.** Local state lives in
 - [`docs/slack-recommended-settings.yaml`](docs/slack-recommended-settings.yaml) —
   recommended Slack-side settings the manifest cannot express (app home,
   workspace admin, stealth deployment profiles)
-- `bridge/` — the listener (Socket Mode intake, audience gate, durable
-  queue); `tests/` — offline tests (`python3 -m unittest discover -s tests`)
+- [`docs/worker.md`](docs/worker.md) — Muse wake-hook interface and recovery
+- `bridge/` — the listener and durable worker interface; `tests/` — offline tests (`python3 -m unittest discover -s tests`)
 - [`config.example.yaml`](config.example.yaml) — example local config;
   copy to `.local/config.yaml` and fill in locally

@@ -27,7 +27,7 @@ class Audience:
 @dataclass
 class BridgeConfig:
     deployment: str
-    ack_reaction: str
+    ack_reaction: str | None
     audiences: list[Audience]
 
     def audience_for_user(self, user_id: str) -> Audience | None:
@@ -72,6 +72,6 @@ def load_config(path: str | Path) -> BridgeConfig:
         raise ValueError("config must define at least one audience")
     return BridgeConfig(
         deployment=str(raw.get("deployment", "unspecified")),
-        ack_reaction=str(raw.get("ackReaction", "eyes")),
+        ack_reaction=raw.get("ackReaction", "eyes"),
         audiences=audiences,
     )

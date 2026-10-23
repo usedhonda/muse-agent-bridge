@@ -55,7 +55,7 @@ class Listener:
                 "thread_ts": event.get("thread_ts") or event.get("ts"),
                 "received_at": datetime.now(timezone.utc).isoformat(),
             }
-            if self.store.append(record):
+            if self.store.append(record) and self.cfg.ack_reaction:
                 self.web.reactions_add(
                     record["channel"], record["ts"], self.cfg.ack_reaction
                 )

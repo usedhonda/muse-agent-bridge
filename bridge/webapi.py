@@ -30,6 +30,15 @@ class SlackWebClient:
             raise RuntimeError(f"auth.test failed: {result.get('error')}")
         return result["user_id"]
 
+    def post_message(self, channel: str, thread_ts: str, text: str) -> str:
+        result = self._post("chat.postMessage", {
+            "channel": channel, "thread_ts": thread_ts, "text": text,
+            "reply_broadcast": False, "unfurl_links": False, "unfurl_media": False,
+        })
+        if not result.get("ok"):
+            raise RuntimeError("chat.postMessage failed")
+        return result["ts"]
+
     def reactions_add(self, channel: str, timestamp: str, name: str) -> None:
         result = self._post(
             "reactions.add",
