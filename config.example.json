@@ -1,1 +1,1 @@
-{"ackReaction":"eyes","channelAllowlist":["Cxxxxxxxxxx"],"deployment":"dedicated-workspace","dmEnabled":true,"hookPollIntervalSec":5,"mentionsOnlyInChannels":true,"ownerUserId":"Uxxxxxxxxxx"}
+{"ackReaction":"eyes","audiences":[{"channelAllowlist":["Cxxxxxxxxxx"],"dmEnabled":true,"id":"owner","mentionsOnlyInChannels":true,"scope":"owner","userIds":["Uxxxxxxxxxx"]}],"deployment":"stealth-shared-workspace","hookPollIntervalSec":5}
