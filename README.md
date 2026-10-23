@@ -21,9 +21,12 @@ thread sessions — carry over; the runtime does not.
 
 ## Policy
 
-- **Owner-only in v1.** The bridge answers exactly one person: its owner.
-  Everyone else is dropped silently at the listener — no reply, no reaction.
-  See the visibility boundary in [docs/design.md](docs/design.md).
+- **Multi-audience capable, locked down by configuration.** The bridge can
+  serve multiple audiences under the governance rules below; who it serves
+  is local config, not code. The first deployment enables exactly one
+  audience — the owner — with everyone else dropped silently at the
+  listener, and uses Slack-side settings to stay invisible to others.
+  See [docs/design.md](docs/design.md).
 - **Information governance is built in from the start**, so the bridge can be
   opened to guests later without redesigning: everything the agent knows is
   scope-tagged (`owner` by default), guest conversations are served only
