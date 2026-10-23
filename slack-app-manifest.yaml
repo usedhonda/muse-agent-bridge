@@ -1,0 +1,46 @@
+# Slack app manifest for muse-slack-bridge (v1, Socket Mode).
+#
+# Create the app from this manifest, then:
+#   1. In the app settings, generate an app-level token with the
+#      `connections:write` scope (required for Socket Mode). App-level tokens
+#      are not part of the manifest.
+#   2. Install the app in the chosen workspace to obtain the bot token.
+# Both tokens are registered through Muse's secure connection flow only.
+# Never commit real tokens, workspace IDs, or channel IDs to this repository.
+display_information:
+  name: Muse
+  description: Personal agent bridge for its owner. Owner-only by policy.
+  background_color: "#1d1d1f"
+features:
+  bot_user:
+    display_name: Muse
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - mpim:read
+      - reactions:write
+      - users:read
+settings:
+  socket_mode_enabled: true
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
