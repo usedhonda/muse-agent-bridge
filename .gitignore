@@ -1,0 +1,19 @@
+# Local state and machine-specific configuration: never commit.
+# (Project rule: connection details, credentials, and local state live in
+# .local/ or in Muse's secure connection — not in this repository.)
+.local/
+
+# Secrets and local config, wherever they appear
+.env
+.env.*
+*.local.json
+config.local.json
+
+# Runtime state and logs
+state/
+*.log
+
+# Tooling noise
+__pycache__/
+node_modules/
+.DS_Store
