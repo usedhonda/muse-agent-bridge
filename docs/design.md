@@ -8,13 +8,19 @@ Give Muse (Meta's personal agent) its own presence in Slack, modeled on how
 OpenClaw's Slack channel works: a dedicated Slack app (bot identity), reached
 over Socket Mode, that can receive DMs and mentions and reply in thread.
 
-**Owner-only by policy.** This bridge serves exactly one human: the workspace
-owner who installed it. It must not answer anyone else, and it should be as
-invisible to other people as the deployment shape allows (see
-"Owner-only access" below).
+**Multi-audience capable, locked down by configuration.** The bridge is
+built from the start to talk to multiple audiences under the information
+governance rules below. Who it actually serves is deployment configuration,
+not code: the first deployment (the owner's own) enables exactly one
+audience — the owner — and uses Slack-side settings to stay invisible to
+everyone else (see "Access control" and "Deployment profiles"). Opening to
+guests later means changing local config and passing the opening gate,
+not redesigning the bridge.
 
-Non-goals for v1: group conversations with third parties, file/media handling,
-slash commands, Slack Agent View / assistant surfaces, posting as the user.
+Non-goals for v1: file/media handling, slash commands, Slack Agent View /
+assistant surfaces, posting as the user. Group conversations with third
+parties are a capability of this design, enabled only per deployment
+config and the M4 opening gate.
 
 ## What we take from OpenClaw (and what we do not)
 
@@ -68,28 +74,46 @@ queue detection within one 5-second hook poll, a typical end-to-end reply in
 seconds to tens of seconds including model time. The ack reaction is posted by
 the listener itself, so "seen" feedback is effectively immediate.
 
-## Owner-only access
+## Access control (audience model)
 
-This is a hard requirement, enforced at the earliest point (the listener),
-not a prompt-level instruction:
+Enforced at the earliest point (the listener), not as a prompt-level
+instruction:
 
-1. **Sender allowlist with exactly one entry**: the owner's Slack user ID,
-   stored only in `.local/config.json`. Events from any other sender are
-   dropped silently before queueing — no reply, no ack reaction, no error
-   message to the sender. Message bodies of dropped events are not retained.
-2. **DMs**: only the owner's DM with the bot is accepted. There is no pairing
-   flow for anyone else.
-3. **Channels**: the bot never auto-joins. It only acts in channels listed in
-   the local channel allowlist, and only for the owner's messages. Other
-   members' messages in those channels are context at most, never triggers,
-   and v1 defaults to mentions-only even there.
-4. **Visibility limits (honest boundary)**: an app installed in a shared
-   workspace still appears in that workspace's app directory; Slack offers no
-   per-user hiding for installed apps. Full invisibility is only achieved by
-   installing the app into a workspace (or org) where the owner is the only
-   member. Both shapes are supported by this design; the sender gate applies
-   identically either way. The deployment choice is recorded in
-   `.local/config.json`, never in this repository.
+1. **Audiences, not a hardcoded owner check.** The listener resolves every
+   event to an audience from the local audience registry (`.local/config.json`):
+   each audience has an id, its members' Slack user IDs, a channel allowlist,
+   DM permission, and the scope tag used for information governance. An event
+   that matches no configured audience is dropped silently before queueing —
+   no reply, no ack reaction, no error to the sender — and its body is not
+   retained.
+2. **Per-audience gating.** Mention requirements and DM acceptance are set
+   per audience. A guest audience can be enabled, restricted, or removed by
+   editing local config only.
+3. **Channels.** The bot never auto-joins. It acts only in channels
+   allowlisted for the resolved audience, and only that audience's messages
+   trigger it there; other members' messages are context at most.
+4. **The first deployment configures exactly one audience**: the owner,
+   containing only the owner's user ID. Behavior is therefore owner-only in
+   practice, while the mechanism stays general.
+
+### Deployment profiles (Slack-side invisibility for the first deployment)
+
+The owner's first use is hidden from other people through Slack-side
+settings, in one of two profiles (recorded as `deployment` in local config):
+
+- **Stealth in a shared workspace**: the app is installed, but the bot is
+  added only to a private channel and used over DM — never added to public
+  channels. Combined with the owner-only audience config, other members get
+  no responses and see no activity. Honest residual: an installed app can
+  still appear in the workspace's app directory; Slack provides no per-user
+  hiding for installed apps, so this profile is "unobtrusive", not
+  "nonexistent".
+- **Dedicated workspace**: the app is installed in a workspace where the
+  owner is the only member. Fully invisible to everyone else.
+
+Switching profiles, or later enabling a guest audience in the same
+deployment, is a config change on the Slack side and in `.local/` — the
+bridge code does not change.
 
 ## Information governance (built in from v1, required before opening up)
 
