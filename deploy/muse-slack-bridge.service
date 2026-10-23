@@ -1,0 +1,20 @@
+# systemd user service template for the muse-slack-bridge listener.
+# Install (on the agent VM):
+#   cp deploy/muse-slack-bridge.service ~/.config/systemd/user/
+#   systemctl --user enable --now muse-slack-bridge
+# Tokens come from .local/tokens.env (chmod 600, gitignored), injected from
+# Muse's secure connection by the operator. They are never committed.
+[Unit]
+Description=muse-slack-bridge Socket Mode listener
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/muse-slack-bridge
+ExecStart=/usr/bin/python3 -m bridge.listener --config %h/muse-slack-bridge/.local/config.yaml --state %h/muse-slack-bridge/.local/state
+EnvironmentFile=%h/muse-slack-bridge/.local/tokens.env
+Environment=PYTHONPATH=%h/muse-slack-bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -80,7 +80,7 @@ Enforced at the earliest point (the listener), not as a prompt-level
 instruction:
 
 1. **Audiences, not a hardcoded owner check.** The listener resolves every
-   event to an audience from the local audience registry (`.local/config.json`):
+   event to an audience from the local audience registry (`.local/config.yaml`):
    each audience has an id, its members' Slack user IDs, a channel allowlist,
    DM permission, and the scope tag used for information governance. An event
    that matches no configured audience is dropped silently before queueing —
@@ -194,7 +194,7 @@ in committed files, examples, fixtures, or docs.
 2. Generate an app-level token (`connections:write`) in the app settings.
 3. Register the bot token and app token through Muse's secure connection
    flow (never by pasting them into chat or files).
-4. Copy `config.example.json` to `.local/config.json` and fill in the local
+4. Copy `config.example.yaml` to `.local/config.yaml` and fill in the local
    values (owner user ID, channel allowlist, deployment shape).
 5. Install and start the listener service; enable the wake hook.
 6. Smoke test in a private test channel: owner mention → ack reaction →

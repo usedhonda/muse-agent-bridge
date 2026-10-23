@@ -2,7 +2,7 @@
 
 Slack Socket Mode bridge that lets Muse (Meta personal agent) join Slack as a bot agent.
 
-Status: **M0 — design only.** Nothing is running yet.
+Status: **M1 — listener skeleton implemented and offline-tested.** Live connection is pending Slack app creation.
 
 ## What this is
 
@@ -47,5 +47,10 @@ IDs, hostnames, or conversation content belong here.** Local state lives in
   information governance, safety rules, milestones, open questions
 - [`slack-app-manifest.yaml`](slack-app-manifest.yaml) — Slack app manifest
   (Socket Mode, v1-minimum scopes and events)
-- [`config.example.json`](config.example.json) — example local config;
-  copy to `.local/config.json` and fill in locally
+- [`docs/slack-recommended-settings.yaml`](docs/slack-recommended-settings.yaml) —
+  recommended Slack-side settings the manifest cannot express (app home,
+  workspace admin, stealth deployment profiles)
+- `bridge/` — the listener (Socket Mode intake, audience gate, durable
+  queue); `tests/` — offline tests (`python3 -m unittest discover -s tests`)
+- [`config.example.yaml`](config.example.yaml) — example local config;
+  copy to `.local/config.yaml` and fill in locally

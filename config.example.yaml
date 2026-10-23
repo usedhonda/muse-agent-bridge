@@ -1,0 +1,26 @@
+# Example local config for muse-slack-bridge.
+# Copy to .local/config.yaml and fill in locally. Real IDs live only there —
+# never commit them. Tokens are NOT configured here: the listener reads
+# SLACK_APP_TOKEN / SLACK_BOT_TOKEN from its environment (see
+# deploy/muse-slack-bridge.service); config files containing token keys are
+# rejected at load time.
+
+deployment: stealth-shared-workspace
+ackReaction: eyes
+hookPollIntervalSec: 5
+
+audiences:
+  - id: owner
+    scope: owner
+    userIds: ["Uxxxxxxxxxx"] # the owner's Slack user ID
+    channelAllowlist: ["Cxxxxxxxxxx"]
+    dmEnabled: true
+    mentionsOnlyInChannels: true
+  # A guest audience, when the owner chooses to open one (see the M4 gate in
+  # docs/design.md). Scope must be shared:<audience-id> or public.
+  # - id: guest-example
+  #   scope: shared:guest-example
+  #   userIds: ["Uyyyyyyyyyy"]
+  #   channelAllowlist: ["Cyyyyyyyyyy"]
+  #   dmEnabled: false
+  #   mentionsOnlyInChannels: true

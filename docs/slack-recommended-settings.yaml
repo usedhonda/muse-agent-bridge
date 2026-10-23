@@ -1,0 +1,53 @@
+# Recommended Slack-side settings for muse-slack-bridge.
+#
+# The app manifest (slack-app-manifest.yaml) covers app creation. This file
+# collects the settings chosen in Slack's UI — app configuration pages and
+# workspace administration — that a manifest cannot express, plus the
+# deployment profiles from docs/design.md. It is guidance, not code:
+# nothing here is read by the bridge, and it contains no real IDs or tokens.
+
+app:
+  create_from_manifest: slack-app-manifest.yaml
+  socket_mode: enabled # required; no Request URL or public endpoint is used
+  app_level_token:
+    # Generated under Basic Information > App-Level Tokens.
+    scopes: [connections:write] # the only app-level scope needed
+  bot_user:
+    display_name: Muse
+    always_online: true
+  app_home:
+    home_tab: disabled
+    messages_tab: enabled # required for DM with the bot
+    messages_tab_read_only: false
+  oauth:
+    user_scopes: [] # bot scopes only; never request user scopes
+    redirect_urls: [] # Socket Mode installs need no redirect URL
+
+workspace_admin:
+  # Slack workspace settings (admin). These keep the deployment quiet and
+  # prevent other members from changing the app surface.
+  app_management:
+    require_admin_approval_to_install_apps: true
+    allow_member_app_requests: false # optional; quieter
+  members:
+    can_message_bots: default # DM to the bot stays possible for the owner
+
+deployment_profiles:
+  # The owner's first deployment. Bridge-side audience config enables the
+  # owner audience only; these are the matching Slack-side settings.
+  stealth_shared_workspace:
+    bot_memberships:
+      public_channels: none # never add the bot to a public channel
+      private_channels: owner_only # the single private channel the bot joins
+    usage: bot DM + that private channel only
+    residual_visibility: >-
+      The installed app can still appear in the workspace app directory;
+      Slack has no per-user hiding for installed apps. Treat this profile
+      as unobtrusive, not nonexistent.
+  dedicated_workspace:
+    members: owner_only # a workspace where the owner is the only member
+    residual_visibility: none
+
+tokens:
+  storage: secure_connection_only # never in this repo, never in .local/ plain files beyond a 0600 env file
+  rotation: regenerate app/bot tokens in the app settings if exposure is suspected
