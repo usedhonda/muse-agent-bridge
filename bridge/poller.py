@@ -7,7 +7,7 @@ secure connection as `custom.slack-muse-bot`; local processes receive an
 token on requests to slack.com. No raw token is ever stored on this VM.
 
 This poller is the matching intake for that custody model: it polls the
-owner's DM channel (and any allowlisted group channels) with the bot
+owner's DM channel (and ordinary allowlisted channels, excluding agentChannels) with the bot
 credential and appends new owner messages to the same durable queue the
 Socket Mode listener writes, in the same record format, so
 `bridge.worker` claims them identically.
@@ -67,7 +67,11 @@ class Poller:
             self.state = json.loads(state_path.read_text(encoding="utf-8"))
         owner = cfg.audiences[0]
         self.owner_id = next(iter(owner.user_ids))
-        self.channels = set(owner.channel_allowlist)
+        # Agent rooms require exact membership validation and pinned routing
+        # metadata, implemented only by the Socket Mode listener. A partial
+        # polling record would be ineligible yet shadow the valid socket copy.
+        # Do not read/retain room messages or weaken cross-transport dedupe.
+        self.channels = set(owner.channel_allowlist) - set(owner.agent_channels)
 
     def _save(self) -> None:
         self.state_path.write_text(json.dumps(self.state), encoding="utf-8")
@@ -128,7 +132,8 @@ class Poller:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="muse-slack-bridge poller")
+    parser = argparse.ArgumentParser(
+        description="Muse polling intake; configured agentChannels require Socket Mode and are excluded")
     parser.add_argument("--config", default=".local/config.yaml")
     parser.add_argument("--state", default=".local/state")
     parser.add_argument("--interval", type=float, default=20.0)

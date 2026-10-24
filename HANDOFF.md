@@ -11,12 +11,16 @@
 - `worker status` distinguishes queued, blocked, ineligible, claimed/stale,
   sending and done counts, and detects incomplete queue tails. It does not
   contact Slack or expose message bodies; it may initialize worker state.
+- Polling excludes configured agent rooms before history reads; only Socket
+  Mode supplies their membership validation and routing metadata. An incomplete
+  poll record must not shadow the valid Socket event. Historical records still
+  require deliberate recovery, not automatic replay.
 - Queue appends lock and refresh persisted dedupe state across cooperating
   local processes, including tagged socket/poll handovers. This requires the
   same local state directory and updated writers; separate hosts are not coordinated.
 - README and VM guide describe setup and operator-selected profiles rather
   than treating historical deployment receipts as current configuration.
-- Offline suite: 81 tests passed, including a real two-process handover race
+- Offline suite: 83 tests passed, including a real two-process handover race
   and long-running claim regression. No runtime deployment or live acceptance
   was performed for this checkpoint. Existing independent draft PRs remain separate.
 

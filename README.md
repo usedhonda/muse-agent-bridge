@@ -49,7 +49,9 @@ Choose one intake profile:
 - **VM polling:** requires Muse's `dynamic_credentials` helper and surrogate-aware
   egress; pip installation alone is insufficient. Start with one owner and DMs
   only, then run `.venv/bin/python -m bridge.poller --interval 20`.
-  The poller does not implement the listener's private agent-room membership gate.
+  The poller excludes configured `agentChannels` entirely because it does not
+  implement their membership gate or routing metadata. These rooms require Socket
+  Mode; polling is not their fallback during a Socket outage.
   A fresh watermark can ingest existing owner messages, so inspect the intended
   DM before starting. See [VM deployment](docs/deployment-vm.md) for launcher
   dependencies and transport cutover precautions.

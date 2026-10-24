@@ -21,7 +21,9 @@ For Socket Mode, launch `.venv/bin/python -m bridge.listener --config
 `deploy/run-listener.sh` demonstrates the VM-specific vault helper. Polling uses
 `.venv/bin/python -m bridge.poller --config .local/config.yaml --state .local/state
 --interval 20`; it cannot run on a generic VM with only the pip dependencies.
-The poller does not implement the listener's private agent-room membership checks.
+The poller excludes configured `agentChannels` from history reads and queue
+writes. Their exact-membership check and pinned routing metadata are implemented
+only by Socket Mode. Polling cannot provide an agent-room outage fallback.
 
 Keep `ackReaction: null` with the supplied manifest. Inject the bot credential
 into worker reply commands too; `deploy/run-worker.sh` is the corresponding

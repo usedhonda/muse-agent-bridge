@@ -108,6 +108,11 @@ if missing, so always use the same `--state` directory as intake.
 Both listener and poller must share that state directory during a handover.
 Append locking and dedupe cover cooperating processes on one host/local
 filesystem; they do not coordinate different hosts or separately copied state.
+Configured agent rooms are Socket-only; the poller excludes them before history
+reads so an ineligible polling record cannot shadow a verified socket event.
+Older incomplete room records are not upgraded or replayed automatically: inspect
+`ineligible` counts and preserve those records while comparing actual runtime and
+Slack delivery before deliberate operator recovery.
 Keep the lock file, queue and seen-ID store together. Do not delete the lock
 file while intake runs. Every append refreshes persisted IDs under the lock;
 the current append-only store reads the full queue and needs an operator
