@@ -5,8 +5,7 @@
 Muse itself is already running. This repository adds its Slack bridge; do
 not confuse pending Slack integration with Muse runtime availability.
 The selected deployment is an existing shared workspace with one authorized
-owner. App existence may be visible to members; conversations and replies
-must remain owner-only. Match the existing private secretary app's settings.
+owner. App existence may be visible to members; only the owner and explicitly named agents in approved private rooms may converse. Match the existing private secretary app's settings.
 Actual app/workspace/channel/user IDs and deployment receipts live only in
 local ignored state, never in this file.
 
@@ -29,25 +28,38 @@ local ignored state, never in this file.
   example config sets `ackReaction: null`. User observation and advanced
   Agent status/title interactions are not implemented by the bridge.
 - Offline checks: the original 10 listener/config checks plus 14 worker,
-  Web API, queue recovery and access-control checks passed. No live
-  Slack/Muse reply has been verified from this checkout.
+  Web API, queue recovery and access-control checks passed. An earlier deployed owner/private-room round trip was verified; new routing
+  changes remain offline-only.
+
+## Current development checkpoint
+
+- Explicit `agentChannels` room-to-agent allowlists permit natural agent
+  conversation without admitting agents into DMs or other rooms. Exact
+  private/unshared membership is checked before intake and before replies.
+- Replies stay in the room for top-level messages and in existing threads
+  for threaded messages. Threads created while a job waits are checked before
+  sending. `skip` completes a no-reply turn without starting an acknowledgement loop.
+- Room history identifies speakers and stays separate from threads and DMs.
+  Agent messages do not create owner authority; substantive authorized work
+  is not subject to a blanket agent-turn quota.
+- Deployment state belongs in ignored local records. Never enable an app,
+  install a hook, or change a runtime solely because this code is available.
+  The Slack Agent experience switch controls presentation, not bot transport
+  or credential revocation. Preserve local runtime changes during upgrades.
+- The bridge uses bot credentials only. It does not provide posting as the
+  human owner, unsolicited outbound actions, or arbitrary destinations.
 
 ## Remaining acceptance and deployment
 
-1. Finish the selected Slack app's OAuth installation and dedicated
-   `connections:write` app-level token creation. Check local deployment
-   state for actual progress; never recreate an existing app blindly.
-2. Register bot/app credentials through the approved secure flow. Do not
-   store tokens in chat, tracked files, plaintext env files, logs or a unit.
-   The service template deliberately requires secure environment injection.
-3. Set local config to the single owner and only the approved owner-only
-   private channel. Confirm membership before allowing channel replies.
-4. Deploy on the running Muse agent VM and register its existing runtime's
-   five-second wake hook using `docs/worker.md`. The runtime integration
-   path is not yet established; the CLI is not an installed wake hook.
-5. Live proof: owner DM and private-channel message -> threaded Muse reply;
-   non-owner and group-DM event -> no queue record, reaction or reply.
-6. Keep guest audiences closed until M4 governance/leak tests are complete.
+1. Reconcile existing runtime modifications before an upgrade; preserve
+   pending/uncertain delivery records and secure credential injection.
+2. Configure the owner and approved private-room agent IDs locally. Do not
+   commit deployment IDs or sample data copied from actual conversations.
+3. Install the listener and five-second hook only for an authorized deployment.
+4. Verify natural agent conversation, direct room replies, existing-thread
+   replies, membership changes, and bot identity on that runtime. Offline
+   tests do not establish live acceptance for this checkpoint.
+5. Keep guest audiences closed until M4 governance/leak tests are complete.
 
 ## Conventions
 

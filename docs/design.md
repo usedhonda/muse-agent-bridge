@@ -1,6 +1,6 @@
 # Design
 
-Status: M1 listener and M2 worker interface implemented offline; live acceptance pending.
+Status: M1/M2 baseline verified on a prior deployment. Private agent-room routing is implemented offline; its live acceptance is pending.
 The current Slack deployment profile matches the existing private secretary app.
 See `worker.md` for the implemented worker contract and deployment differences.
 
@@ -96,8 +96,11 @@ instruction:
    allowlisted for the resolved audience, and only that audience's messages
    trigger it there; other members' messages are context at most.
 4. **The first deployment configures exactly one audience**: the owner,
-   containing only the owner's user ID. Behavior is therefore owner-only in
-   practice, while the mechanism stays general.
+   containing only the owner's user ID. Explicit `agentChannels` exceptions
+   admit only named bots in specific private rooms; they never grant agent DM
+   access. Exact membership is checked at intake and send. These rooms accept
+   natural conversation without mentions and reply in place (room or existing
+   thread); all other surfaces retain their existing policy.
 
 ### Deployment profiles (Slack-side invisibility for the first deployment)
 

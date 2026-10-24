@@ -22,6 +22,8 @@ class Audience:
     channel_allowlist: set[str] = field(default_factory=set)
     dm_enabled: bool = False
     mentions_only_in_channels: bool = True
+    # Explicit private-room exceptions; agent IDs never become DM principals.
+    agent_channels: dict[str, set[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -35,6 +37,13 @@ class BridgeConfig:
             if user_id in audience.user_ids:
                 return audience
         return None
+
+    def audience_for_sender(self, user_id: str, channel: str) -> Audience | None:
+        audience = self.audience_for_user(user_id)
+        if audience is not None:
+            return audience
+        return next((a for a in self.audiences
+                     if user_id in a.agent_channels.get(channel, set())), None)
 
 
 def _check_no_secrets(node, path: str = "") -> None:
@@ -57,6 +66,12 @@ def load_config(path: str | Path) -> BridgeConfig:
     _check_no_secrets(raw)
     audiences: list[Audience] = []
     for entry in raw.get("audiences", []):
+        rooms = entry.get("agentChannels", {})
+        if not isinstance(rooms, dict) or any(
+            not isinstance(users, list) or any(not isinstance(u, str) or not u.strip() for u in users)
+            for users in rooms.values()
+        ):
+            raise ValueError("agentChannels must map channel IDs to agent ID lists")
         audience = Audience(
             id=str(entry["id"]),
             scope=str(entry["scope"]),
@@ -64,7 +79,18 @@ def load_config(path: str | Path) -> BridgeConfig:
             channel_allowlist={str(c) for c in entry.get("channelAllowlist", [])},
             dm_enabled=bool(entry.get("dmEnabled", False)),
             mentions_only_in_channels=bool(entry.get("mentionsOnlyInChannels", True)),
+            agent_channels={str(c): {str(u) for u in users}
+                            for c, users in rooms.items()},
         )
+        if audience.agent_channels and (
+            audience.id != "owner" or audience.scope != "owner"
+            or len(audience.user_ids) != 1
+            or not set(audience.agent_channels) <= audience.channel_allowlist
+            or any(not agents or agents & audience.user_ids
+                   or not channel.startswith(("C", "G"))
+                   for channel, agents in audience.agent_channels.items())
+        ):
+            raise ValueError("agentChannels requires owner-only allowlisted private rooms")
         if not _valid_scope(audience.scope, audience.id):
             raise ValueError(f"invalid scope for audience {audience.id}: {audience.scope}")
         audiences.append(audience)

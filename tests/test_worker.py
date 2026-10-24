@@ -129,7 +129,7 @@ class StoreRecoveryTests(unittest.TestCase):
 class WebClientTests(unittest.TestCase):
     def test_posts_in_thread_as_bot_without_broadcast(self):
         web = SlackWebClient("fake-test-credential")
-        web._post = Mock(return_value={"ok": True, "ts": "101.1"})
+        web._post = Mock(return_value={"ok": True, "ts": "101.1", "bot_id": "B_TEST", "user_id": "U_TEST_BOT"})
         self.assertEqual(web.post_message("D_TEST", "100.1", "answer"), "101.1")
         method, params = web._post.call_args.args
         self.assertEqual(method, "chat.postMessage")

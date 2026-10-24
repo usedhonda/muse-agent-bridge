@@ -17,6 +17,10 @@ audiences:
     channelAllowlist: ["Cxxxxxxxxxx"]
     dmEnabled: true
     mentionsOnlyInChannels: true
+    # Optional owner + named agents + Muse private room. Add this channel to
+    # channelAllowlist too. Actual membership must match exactly at intake/send.
+    # agentChannels:
+    #   Czzzzzzzzzz: ["UagentOne", "UagentTwo"]
   # A guest audience, when the owner chooses to open one (see the M4 gate in
   # docs/design.md). Scope must be shared:<audience-id> or public.
   # - id: guest-example

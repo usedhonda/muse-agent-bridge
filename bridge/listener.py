@@ -44,6 +44,11 @@ class Listener:
             decision = resolve_event(self.cfg, event, self.bot_user_id)
             if not decision.accepted:
                 return  # silent drop: no queue entry, no reaction, no body kept
+            agents = decision.audience.agent_channels.get(event.get("channel"))
+            if agents and (self.bot_user_id in agents or not self.web.private_room_matches(
+                event["channel"], decision.audience.user_ids | agents | {self.bot_user_id}
+            )):
+                return
             record = {
                 "event_id": payload.get("event_id"),
                 "audience_id": decision.audience.id,
@@ -55,6 +60,13 @@ class Listener:
                 "thread_ts": event.get("thread_ts") or event.get("ts"),
                 "received_at": datetime.now(timezone.utc).isoformat(),
             }
+            if agents:
+                # Keep an existing thread; ordinary room messages stay in the room.
+                thread = event.get("thread_ts")
+                if not thread and event.get("reply_count", 0):
+                    thread = event.get("ts")
+                record.update(reply_thread_ts=thread, conversation_ts=thread or "",
+                              bot_user_id=self.bot_user_id)
             if self.store.append(record) and self.cfg.ack_reaction:
                 self.web.reactions_add(
                     record["channel"], record["ts"], self.cfg.ack_reaction

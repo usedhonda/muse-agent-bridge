@@ -2,7 +2,7 @@
 
 Slack Socket Mode bridge that lets Muse (Meta personal agent) join Slack as a bot agent.
 
-Status: **M1 listener and M2 worker interface are implemented and offline-tested.** Live Slack/Muse integration is still pending. See [HANDOFF.md](HANDOFF.md).
+Status: **M1 listener and M2 worker interface are implemented and offline-tested.** An owner/private-room round trip was verified on an earlier deployment. New agent-room routing is offline-tested and has not been deployed. See [HANDOFF.md](HANDOFF.md).
 
 ## What this is
 
@@ -11,7 +11,7 @@ A dedicated Slack app (bot identity) plus a small bridge on Muse's agent VM:
 - A Socket Mode listener receives DMs and mentions and writes them to a
   durable local queue.
 - A wake hook (5-second poll) starts a Muse turn; replies are posted as the
-  bot, in the originating thread. Receipt reactions are optional; the matching private secretary
+  bot, in the originating thread, or directly in an explicitly configured private agent room. Receipt reactions are optional; the matching private secretary
   deployment profile leaves them disabled.
 
 Modeled on OpenClaw's Slack channel (`openclaw/openclaw`,
