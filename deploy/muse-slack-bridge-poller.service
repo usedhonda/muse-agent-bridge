@@ -1,12 +1,10 @@
 # systemd service for the polling intake on Muse's agent VM.
-# Installed to /etc/systemd/system/muse-slack-bridge-poller.service by the
-# wake hook's watchdog when missing (VM replacements wipe /etc; the copy
-# in this repository is the source of truth).
-# The bot credential is vault-held (custom.slack-muse-bot); the poller
-# fetches an hsurr:* surrogate from authd per request, so this unit needs
-# no secret environment at all. Until the credential is registered the
-# poller idles with logged errors and starts working on its own once the
-# credential exists.
+# Template only: installation/ownership must be configured through the host's
+# approved lifecycle mechanism. This repository contains no watchdog installer.
+# Paths below are examples; adapt them and verify the supported service manager.
+# Polling needs the runtime-specific dynamic_credentials adapter and authorized
+# surrogate-aware egress. It excludes configured agentChannels (Socket-only).
+# See docs/runtime-lifecycle.md; this file does not prove restart persistence.
 [Unit]
 Description=muse-slack-bridge polling intake (owner DM)
 After=network-online.target

@@ -49,6 +49,13 @@ The external runtime must schedule `bridge.worker next` no faster than every
 five seconds, carry the event ID through its turn, and call `reply` or `skip`.
 Use [the worker contract](worker.md) for packet handling and runtime recovery.
 
+Keep short checks and long-lived intake/model execution under separate supported
+lifecycle owners. The shell launchers use `exec` and do not detach from a check
+or install a keeper. If the user bus is unavailable, establish the host's approved
+lifecycle mechanism before claiming unattended recovery; see the
+[runtime lifecycle contract](runtime-lifecycle.md) for existing support, manual
+recovery limits and required deployment evidence.
+
 ## Upgrade and transport cutover
 
 1. Pause intake and new wake-hook claims. Inspect `bridge.worker pending` and

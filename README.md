@@ -119,6 +119,7 @@ credentials belong in your approved secure connection or secret injector.
 - [Review backlog](docs/review-backlog.md) — completed offline work and remaining acceptance
 
 - [VM deployment](docs/deployment-vm.md) — operator-selected profiles, supervision and upgrades
+- [Runtime lifecycle](docs/runtime-lifecycle.md) — separate short checks, resident intake and model execution
 - [Worker integration](docs/worker.md) — wake hook, routing and recovery
 - [Design](docs/design.md) — architecture, governance and milestones
 - [Slack manifest](slack-app-manifest.yaml) and [example config](config.example.yaml)

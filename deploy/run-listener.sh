@@ -6,8 +6,9 @@
 # Credentials:
 #   SLACK_BOT_TOKEN <- secure connection "custom.slack-muse-bot"
 #   SLACK_APP_TOKEN <- secure connection "custom.slack-muse-app"
-# Exit code 3 means the app-level credential is not registered yet; the
-# keeper treats that as "waiting", not as a crash.
+# Exit code 3 means a required credential is unavailable; the
+# caller may classify that as "waiting". No keeper is installed by this script.
+# exec preserves the caller lifecycle; an approved supervisor must own it.
 set -eu
 cd "$(dirname "$0")/.."
 SURROGATES=$(.venv/bin/python - << 'PYEOF'

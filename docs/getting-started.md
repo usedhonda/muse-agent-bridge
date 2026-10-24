@@ -80,6 +80,8 @@ already alive, and verify recovery after a real runtime restart. This repository
 does not supply a portable keeper for that lifecycle; document the target-specific
 registration and rollback before claiming unattended recovery. If supervision is
 unavailable, describe the deployment as manual-start rather than auto-recovering.
+See the [runtime lifecycle contract](runtime-lifecycle.md) to separate intake,
+short checks and model execution without assuming a parent-process escape.
 The launch command above also serves as the manual recovery entry after checking
 for an existing listener; preserve `.local/` and reconcile unfinished work first.
 
