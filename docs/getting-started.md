@@ -116,8 +116,11 @@ exception details are excluded. `dropped` reasons include `no-mention`,
 logs local and protected. This instrumentation cannot explain past drops that
 occurred before it was enabled, and it does not measure runtime execution.
 
-Startup authentication retries transient network/API failures up to five times
-with bounded backoff; invalid bot identity/credentials fail closed. WebSocket
+Startup authentication makes at most five attempts for transient network/API
+failures. HTTP 408/429/500/502/503/504 may retry; other HTTP errors, including
+401/403, stop immediately. Valid `Retry-After` values (seconds or HTTP date)
+set a minimum delay and are not truncated by the backoff cap. Missing or invalid
+values use bounded exponential backoff. Invalid bot identity/credentials fail closed. WebSocket
 connection exceptions and empty receives trigger reconnect. These are recovery
 inside the listener process, not process supervision after a runtime restart.
 

@@ -23,6 +23,8 @@ import sys
 import os
 import time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from urllib.error import HTTPError
 
 from .audience import resolve_event
 from .config import BridgeConfig, load_config
@@ -110,16 +112,38 @@ class Listener:
             self.handle_envelope(envelope, transport.send_ack)
 
 
+def _http_retry_delay(headers, fallback):
+    value = (headers or {}).get("Retry-After", "").strip()
+    if re.fullmatch(r"[0-9]+", value):
+        return max(fallback, int(value))
+    try:
+        deadline = parsedate_to_datetime(value)
+        if deadline.tzinfo is not None:
+            return max(fallback, deadline.timestamp() - time.time())
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return fallback
+
+
 def authenticate(web, sleep=time.sleep, attempts=5, diagnostic=None):
-    """Bounded startup retry for transport failures; invalid identities fail closed."""
+    """Retry transient startup failures only; respect server Retry-After."""
     for attempt in range(attempts):
+        delay = min(2 ** attempt, 30)
         try:
             return web.auth_test()
+        except HTTPError as error:
+            # HTTPError subclasses OSError. Classify it first so permanent
+            # credential/config failures never enter the network retry path.
+            if error.code not in {408, 429, 500, 502, 503, 504}:
+                raise RuntimeError("bot authentication HTTP failure (status %d)" % error.code) from None
+            delay = _http_retry_delay(error.headers, delay)
         except (OSError, ConnectionError):
-            if diagnostic is not None:
-                diagnostic(dict(stage="auth-retry", attempt=attempt + 1))
-            if attempt + 1 < attempts:
-                sleep(min(2 ** attempt, 30))
+            pass
+        if diagnostic is not None:
+            diagnostic(dict(stage="auth-retry" if attempt + 1 < attempts else "auth-exhausted",
+                            attempt=attempt + 1, retry_seconds=delay if attempt + 1 < attempts else None))
+        if attempt + 1 < attempts:
+            sleep(delay)
     raise RuntimeError("bot authentication unavailable after startup retries") from None
 
 

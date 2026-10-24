@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 import websocket
 
 from bridge.config import Audience, BridgeConfig
@@ -38,6 +39,45 @@ class ListenerRecoveryTests(unittest.TestCase):
         web.auth_test.side_effect = OSError('private credential detail')
         with self.assertRaisesRegex(RuntimeError, '^bot authentication unavailable after startup retries$'):
             authenticate(web, sleep=sleep, attempts=2)
+
+    def test_permanent_http_auth_failures_stop_without_retry_or_private_error(self):
+        for code in (400, 401, 403, 404, 501):
+            with self.subTest(code=code):
+                web, sleep, reports = Mock(), Mock(), []
+                web.auth_test.side_effect = HTTPError('https://invalid.example/private', code,
+                                                     'private error detail', {}, None)
+                with self.assertRaisesRegex(RuntimeError, 'authentication HTTP failure'):
+                    authenticate(web, sleep=sleep, diagnostic=reports.append)
+                web.auth_test.assert_called_once()
+                sleep.assert_not_called()
+                self.assertEqual(reports, [])
+
+    def test_rate_limit_respects_numeric_and_http_date_retry_after(self):
+        for header in ('60', 'Thu, 01 Jan 1970 00:02:40 GMT'):
+            with self.subTest(header=header), patch('bridge.listener.time.time', return_value=100):
+                web, sleep = Mock(), Mock()
+                web.auth_test.side_effect = [HTTPError('https://invalid.example', 429,
+                    'private error detail', {'Retry-After': header}, None), 'U_BOT']
+                self.assertEqual(authenticate(web, sleep=sleep), 'U_BOT')
+                sleep.assert_called_once_with(60)
+
+    def test_transient_http_failures_retry_with_fallback_for_invalid_retry_after(self):
+        web, sleep = Mock(), Mock()
+        web.auth_test.side_effect = [HTTPError('https://invalid.example', 503,
+            'private detail', {'Retry-After': 'malformed private detail'}, None),
+            HTTPError('https://invalid.example', 429, 'private detail', {}, None), 'U_BOT']
+        self.assertEqual(authenticate(web, sleep=sleep), 'U_BOT')
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+
+    def test_rate_limit_retry_budget_stops_without_sleeping_after_last_attempt(self):
+        web, sleep, reports = Mock(), Mock(), []
+        web.auth_test.side_effect = HTTPError('https://invalid.example/private', 429,
+            'private detail', {'Retry-After': '60'}, None)
+        with self.assertRaisesRegex(RuntimeError, '^bot authentication unavailable after startup retries$'):
+            authenticate(web, sleep=sleep, attempts=2, diagnostic=reports.append)
+        self.assertEqual(web.auth_test.call_count, 2)
+        sleep.assert_called_once_with(60)
+        self.assertNotIn('private', json.dumps(reports))
 
     def test_websocket_failure_reconnects_and_closes_transport(self):
         transport = SocketModeTransport('synthetic')

@@ -25,7 +25,7 @@ Offline evidence is not live acceptance; compare deployed source separately.
 | ACK timing | Membership API and fsync precede protocol ACK | Measure three-second deadline; do not assume Slack replay guarantees | Pending operator/runtime acceptance |
 | Room replies | Blank acknowledgements can trigger pointless bot exchanges | Preserve skip; test substantive collaboration without empty response loops | Skip preserved; live conversational acceptance pending |
 | Diagnostic visibility | Connected/queued/running/sent are different states | Expose metadata-only stage status and waiting owner/reason | Added worker status and opt-in intake drop reasons; runtime start/end instrumentation remains |
-| Validation | Source tests cannot establish installed runtime acceptance | Record offline, deployed and end-to-end results separately | 77 offline tests pass; deployment/live acceptance not performed |
+| Validation | Source tests cannot establish installed runtime acceptance | Record offline, deployed and end-to-end results separately | 81 offline tests pass; deployment/live acceptance not performed |
 
 [Getting started](getting-started.md) and the [worker contract](worker.md) cover
 setup and diagnosis. Draft PRs #2 (secondary seen-ID persistence) and #3 (queued
