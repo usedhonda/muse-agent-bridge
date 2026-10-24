@@ -48,7 +48,8 @@ In these rooms, natural messages are eligible without a formal mention.
 Top-level messages receive top-level replies. Existing `thread_ts` is
 preserved; before a top-level reply, the worker checks whether a thread has
 since appeared on the original message and uses it if present. The model
-cannot choose another destination. Legacy DM/channel routing remains threaded.
+cannot choose another destination. DM/channel replies use `replyInThreads` (default `true`); set it to `false`
+for top-level replies. Agent-room routing follows the rules above independently.
 
 The packet includes `conversation_policy`. Follow it: agent conversation
 must not become new owner authorization or import private DM memory. Skip
@@ -77,11 +78,51 @@ later messages in the same thread wait for the earlier turn to complete.
 Different threads can advance independently. A failed Muse turn leaves a
 claim in place instead of silently starting another turn on the next poll.
 
+## Diagnose the stage
+
+Run without Slack credentials or a network request:
+
+```sh
+python3 -m bridge.worker status
+python3 -m bridge.worker pending
+```
+
+`status` reports counts only, with no message text or sender IDs:
+
+- `queued`: eligible records not yet claimed and not behind an active turn.
+- `blocked`: unclaimed records waiting for an unfinished turn in the same conversation.
+- `ineligible`: queued records rejected by the current worker policy/config.
+- `claimed`: handed to the runtime; this does not prove the runtime is still running.
+- `stale_claimed`: a subset of claimed jobs older than 15 minutes (or without a claim timestamp).
+- `sending`: delivery outcome is uncertain; check Slack before recovery.
+- `done`: worker finished posting or skipping, or delivery was reconciled. This does not prove an external task succeeded.
+
+An empty queue does not prove listener connectivity or Slack delivery. A Socket
+Mode envelope ACK confirms durable intake (or deliberate rejection), and an
+optional receipt reaction means reception, not execution or completion. A
+non-null `next` result is the runtime handoff; the runtime must separately
+report execution progress and the task result. `status` does not poll Slack,
+start a turn or test the runtime wake hook. It initializes local worker state
+if missing, so always use the same `--state` directory as intake.
+
+Both listener and poller must share that state directory during a handover.
+Append locking and dedupe cover cooperating processes on one host/local
+filesystem; they do not coordinate different hosts or separately copied state.
+Keep the lock file, queue and seen-ID store together. Do not delete the lock
+file while intake runs. Every append refreshes persisted IDs under the lock;
+the current append-only store reads the full queue and needs an operator
+retention plan for large deployments.
+
 ## Recovery
 
 Inspect unfinished job metadata with `python3 -m bridge.worker pending`.
 `python3 -m bridge.worker resume EVENT_ID` returns an existing claimed packet
-for deliberate continuation, not an automatic new turn.
+for deliberate continuation, not an automatic new turn. Age alone never releases
+a claim: a long task may still be running and may already have performed external
+actions. Before `resume`, verify the previous runtime stopped, inspect its task
+progress, and continue from that progress. `resume` refreshes the diagnostic age.
+There is no automatic 15-minute replay. A stale sending job is never resumed;
+use delivery reconciliation below.
 
 A post is marked `sending` durably before contacting Slack. A crash, timeout,
 API rejection, or lost success response leaves it there and prohibits

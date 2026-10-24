@@ -27,9 +27,6 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
-from dynamic_credentials import add_surrogate_to_request, read_json_response
-
 from .config import load_config
 from .store import EventStore
 
@@ -38,6 +35,14 @@ _API = "https://slack.com/api/"
 
 
 def api(method: str, params: dict) -> dict:
+    # Keep offline tests and --help portable; only live polling requires
+    # the runtime's credential adapter. Never substitute another credential.
+    sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
+    try:
+        from dynamic_credentials import add_surrogate_to_request, read_json_response
+    except ImportError as exc:
+        raise RuntimeError("polling requires the Muse dynamic_credentials adapter; "
+                           "use Socket Mode on other hosts") from exc
     request = urllib.request.Request(
         _API + method,
         data=json.dumps(params).encode("utf-8"),

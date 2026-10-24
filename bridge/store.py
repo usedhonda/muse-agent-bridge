@@ -8,6 +8,7 @@ after a disconnection is not guaranteed by this local store.
 from __future__ import annotations
 
 import json
+import fcntl
 from pathlib import Path
 
 
@@ -17,6 +18,9 @@ class EventStore:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.queue_path = self.state_dir / "queue.jsonl"
         self.seen_path = self.state_dir / "seen_ids.txt"
+        self._reload_seen()
+
+    def _reload_seen(self):
         self._seen: set[str] = set()
         if self.seen_path.exists():
             self._seen = {
@@ -43,6 +47,14 @@ class EventStore:
 
     def append(self, record: dict) -> bool:
         """Append a record; returns False (and writes nothing) on duplicate."""
+        # A separate lock file covers both persistence files. Refresh under
+        # that lock: another long-lived listener/poller may have appended.
+        with (self.state_dir / "append.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self._reload_seen()
+            return self._append_locked(record)
+
+    def _append_locked(self, record: dict) -> bool:
         event_id = record["event_id"]
         if not isinstance(event_id, str) or not event_id:
             raise ValueError("event_id must be a nonempty string")

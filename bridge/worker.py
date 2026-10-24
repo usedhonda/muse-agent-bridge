@@ -15,12 +15,8 @@ import time
 from .config import load_config
 from .store import EventStore
 
-# A claimed turn that never finishes (its runtime died, the session was
-# replaced, ...) must not block its conversation forever: per-conversation
-# ordering means one zombie claim silences every later message behind it.
-# Claims older than this are treated as abandoned and released on the
-# next claim pass. 900s is comfortably above the longest observed
-# legitimate turn (~9 min) and short enough to unblock a dead queue.
+# Age is an operator diagnostic, never proof that a runtime stopped. Replaying
+# an active turn can repeat external actions, even if Slack replies dedupe.
 CLAIM_TTL_SECONDS = 900
 
 
@@ -74,15 +70,8 @@ class Worker:
         records = self.store.read_queue()
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            # Release abandoned claims first (see CLAIM_TTL_SECONDS): the
-            # job row is deleted, so the queue record can be claimed again.
-            # 'sending' rows are NOT touched; their delivery is uncertain
-            # and still goes through reconcile.
-            self.db.execute(
-                "DELETE FROM jobs WHERE status='claimed' AND "
-                "(claimed_at IS NULL OR claimed_at < ?)",
-                (time.time() - CLAIM_TTL_SECONDS,),
-            )
+            # Never reclaim by age: only an operator can establish that the
+            # previous runtime stopped and deliberately resume its packet.
             for record in records:
                 if not self._allowed(record):
                     continue
@@ -136,6 +125,33 @@ class Worker:
             "SELECT event_id, status, slack_ts FROM jobs WHERE status != 'done' ORDER BY rowid"
         )]
 
+    def status(self):
+        """Metadata-only queue diagnosis; does not claim, resume or contact Slack."""
+        records = self.store.read_queue()
+        jobs = {row["event_id"]: row for row in self.db.execute("SELECT * FROM jobs")}
+        active = [json.loads(row["record"]) for row in jobs.values() if row["status"] != "done"]
+        counts = dict(queued=0, blocked=0, ineligible=0, claimed=0, stale_claimed=0,
+                      sending=0, done=0)
+        now = time.time()
+        for row in jobs.values():
+            counts[row["status"]] += 1
+            if row["status"] == "claimed" and (row["claimed_at"] is None or
+                    now - row["claimed_at"] > CLAIM_TTL_SECONDS):
+                counts["stale_claimed"] += 1
+        for record in records:
+            if record["event_id"] in jobs:
+                continue
+            if not self._allowed(record):
+                counts["ineligible"] += 1
+            elif any(self._conversation(other) == self._conversation(record) for other in active):
+                counts["blocked"] += 1
+            else:
+                counts["queued"] += 1
+        data = self.store.queue_path.read_bytes() if self.store.queue_path.exists() else b""
+        return {"counts": counts, "incomplete_queue_tail": bool(data and not data.endswith(b"\n")),
+                "stale_claim_action": "verify previous runtime stopped before resume",
+                "sending_action": "verify Slack delivery before reconcile"}
+
     def resume(self, event_id):
         job = self.db.execute("SELECT * FROM jobs WHERE event_id=?", (event_id,)).fetchone()
         if job is None or job["status"] != "claimed":
@@ -144,7 +160,7 @@ class Worker:
         if not self._allowed(record):
             raise ValueError("event no longer allowed by current config")
         with self.db:
-            # A resumed turn is alive again; restart its claim lease.
+            # Deliberate continuation refreshes the diagnostic claim age.
             self.db.execute("UPDATE jobs SET claimed_at=? WHERE event_id=?",
                             (time.time(), event_id))
         return self._packet(record)
@@ -205,6 +221,7 @@ def main():
     parser.add_argument("--state", default=".local/state")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("next", help="claim one new owner event; JSON null if none")
+    sub.add_parser("status", help="show queue counts and recovery hints; never starts a turn")
     sub.add_parser("pending", help="show unfinished job metadata without restarting turns")
     skip = sub.add_parser("skip", help="finish a claimed turn without posting")
     skip.add_argument("event_id")
@@ -222,6 +239,8 @@ def main():
     try:
         if args.action == "next":
             result = worker.claim()
+        elif args.action == "status":
+            result = worker.status()
         elif args.action == "pending":
             result = worker.pending()
         elif args.action == "resume":
