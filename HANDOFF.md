@@ -13,7 +13,7 @@
   same local state directory and updated writers; separate hosts are not coordinated.
 - README and VM guide describe setup and operator-selected profiles rather
   than treating historical deployment receipts as current configuration.
-- Offline suite: 69 tests passed, including a real two-process handover race
+- Offline suite: 71 tests passed, including a real two-process handover race
   and long-running claim regression. No runtime deployment or live acceptance
   was performed for this checkpoint. Existing independent draft PRs remain separate.
 

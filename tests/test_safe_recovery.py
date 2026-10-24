@@ -67,3 +67,22 @@ class SafeRecoveryTests(unittest.TestCase):
             first, second = EventStore(directory), EventStore(directory)
             self.assertTrue(first.append(event('Ev1')))
             self.assertFalse(second.append(event('Ev1')))
+
+    def test_dispatcher_can_retry_confirmed_unstarted_but_not_uncertain_delivery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(directory)
+            store.append(event('Ev1'))
+            cfg = BridgeConfig('test', None, [Audience('owner', 'owner', {'U_OWNER'}, set(), True)])
+            worker = Worker(cfg, store)
+            try:
+                worker.claim()
+                worker.release_unstarted('Ev1')
+                self.assertEqual(worker.status()['counts']['queued'], 1)
+                self.assertEqual(worker.claim()['event']['event_id'], 'Ev1')
+                with worker.db:
+                    worker.db.execute("UPDATE jobs SET status='sending'")
+                with self.assertRaises(ValueError):
+                    worker.release_unstarted('Ev1')
+                self.assertIsNone(worker.claim())
+            finally:
+                worker.close()

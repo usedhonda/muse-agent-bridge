@@ -119,6 +119,20 @@ class Worker:
             if not changed:
                 raise ValueError("only a claimed turn can be skipped")
 
+    def release_unstarted(self, event_id):
+        """Dispatcher confirms no runtime turn started; return to normal intake.
+
+        A timeout, process death or model error after starting is not evidence
+        for this operation: prior external actions may have succeeded.
+        """
+        with self.db:
+            changed = self.db.execute(
+                "DELETE FROM jobs WHERE event_id=? AND status='claimed'",
+                (event_id,),
+            ).rowcount
+            if not changed:
+                raise ValueError("only a claimed, confirmed-unstarted turn can be released")
+
     def pending(self):
         # Metadata only: this is an operator recovery view, not another turn.
         return [dict(row) for row in self.db.execute(
@@ -223,6 +237,9 @@ def main():
     sub.add_parser("next", help="claim one new owner event; JSON null if none")
     sub.add_parser("status", help="show queue counts and recovery hints; never starts a turn")
     sub.add_parser("pending", help="show unfinished job metadata without restarting turns")
+    release = sub.add_parser("release", help="dispatcher recovery only when no runtime turn started")
+    release.add_argument("event_id")
+    release.add_argument("--confirmed-not-started", action="store_true", required=True)
     skip = sub.add_parser("skip", help="finish a claimed turn without posting")
     skip.add_argument("event_id")
     reply = sub.add_parser("reply", help="post UTF-8 stdin to the claimed event's fixed location")
@@ -245,6 +262,9 @@ def main():
             result = worker.pending()
         elif args.action == "resume":
             result = worker.resume(args.event_id)
+        elif args.action == "release":
+            worker.release_unstarted(args.event_id)
+            result = {"released": True}
         elif args.action == "skip":
             worker.skip(args.event_id)
             result = {"skipped": True}

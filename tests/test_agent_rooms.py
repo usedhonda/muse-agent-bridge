@@ -46,6 +46,14 @@ class AgentRoomTests(unittest.TestCase):
         self.web.private_room_matches.assert_called_with(
             'C_ROOM', {'U_OWNER', 'U_PEER', 'U_SECOND', 'U_MUSE'})
 
+    def test_owner_plain_text_name_and_mention_all_wake_configured_agent_room(self):
+        for index, text in enumerate(('hello', 'Muse, hello', '<@U_MUSE> hello')):
+            self.intake('EvOwner' + str(index), user='U_OWNER', bot_id=None,
+                        subtype=None, text=text, ts='110.' + str(index))
+        self.assertEqual([row['text'] for row in self.store.read_queue()],
+                         ['hello', 'Muse, hello', '<@U_MUSE> hello'])
+        self.assertEqual(self.worker.claim()['event']['user'], 'U_OWNER')
+
     def test_existing_thread_stays_in_place(self):
         self.intake(thread_ts='90.1')
         self.worker.claim()

@@ -115,6 +115,22 @@ retention plan for large deployments.
 
 ## Recovery
 
+Eligible events without claims are known to be unstarted and continue through
+`next` automatically. If the dispatcher receives a claim but can establish that
+it failed **before starting any runtime turn** (for example, process creation
+failed), it may release that claim and let normal polling retry without human
+approval:
+
+```sh
+python3 -m bridge.worker release EVENT_ID --confirmed-not-started
+```
+
+The flag is an assertion by the dispatcher, not an inference made by the bridge.
+A runtime exception, timeout or process exit after starting is insufficient:
+external actions may already have happened. Resume that work from recorded
+progress, and reconcile uncertain posts separately. Do not connect a blanket
+exception handler to `release`. `sending` and completed jobs cannot be released.
+
 Inspect unfinished job metadata with `python3 -m bridge.worker pending`.
 `python3 -m bridge.worker resume EVENT_ID` returns an existing claimed packet
 for deliberate continuation, not an automatic new turn. Age alone never releases

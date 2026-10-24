@@ -113,6 +113,9 @@ credentials belong in your approved secure connection or secret injector.
 
 ## Further reading
 
+- [Getting started and diagnosing a silent bot](docs/getting-started.md) — detailed VM profile and stage checks
+- [Review backlog](docs/review-backlog.md) — completed offline work and remaining acceptance
+
 - [VM deployment](docs/deployment-vm.md) — operator-selected profiles, supervision and upgrades
 - [Worker integration](docs/worker.md) — wake hook, routing and recovery
 - [Design](docs/design.md) — architecture, governance and milestones
