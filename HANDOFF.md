@@ -33,6 +33,13 @@ local ignored state, never in this file.
 
 ## Current development checkpoint
 
+- Agent-room replies freshly verify that `auth.test` identifies the same bot
+  recorded by the listener at intake, before membership reads or setting the
+  job to `sending`. A different bot or failed identity check leaves the job
+  claimed and sends nothing. This does not govern external posting paths or
+  legacy DM/channel records, and is not a deployed runtime fix.
+- This checkpoint has 59 passing offline tests (six new identity regressions)
+  and passing compile checks; live identity/round-trip acceptance is pending.
 - Intake durability: accepted events are protocol-ACKed only after authorized
   queue persistence. Membership API failures remain unacknowledged rather than
   being treated as verified rejection; optional reactions happen afterward.

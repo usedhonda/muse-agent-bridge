@@ -154,6 +154,11 @@ class Worker:
                 raise ValueError("event no longer allowed by current config")
             thread = record["thread_ts"]
             if "reply_thread_ts" in record:
+                # Agent-room records bind replies to the listener's bot identity.
+                # Membership alone cannot distinguish another bot in the room.
+                # Legacy records have no such identity binding and are unchanged.
+                if web.auth_test() != record["bot_user_id"]:
+                    raise ValueError("reply bot identity does not match queued listener identity")
                 audience = self.cfg.audience_for_sender(record["user"], record["channel"])
                 members = (audience.user_ids | audience.agent_channels[record["channel"]]
                            | {record["bot_user_id"]})

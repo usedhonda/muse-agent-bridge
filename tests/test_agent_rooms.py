@@ -19,6 +19,7 @@ class AgentRoomTests(unittest.TestCase):
         self.cfg = BridgeConfig('test', None, [self.audience])
         self.store = EventStore(self.tmp.name)
         self.web = Mock()
+        self.web.auth_test.return_value = 'U_MUSE'
         self.web.private_room_matches.return_value = True
         self.web.has_thread.return_value = False
         self.web.post_message.return_value = '300.1'
