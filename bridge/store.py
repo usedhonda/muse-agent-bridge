@@ -45,13 +45,15 @@ class EventStore:
             import os
 
             os.fsync(fh.fileno())
+        # The queue is authoritative and durable now. A secondary seen-ID
+        # failure must not make a same-process redelivery append a duplicate.
+        self._seen.add(event_id)
         with self.seen_path.open("a", encoding="utf-8") as fh:
             fh.write(event_id + "\n")
             fh.flush()
             import os
 
             os.fsync(fh.fileno())
-        self._seen.add(event_id)
         return True
 
     def read_queue(self) -> list[dict]:

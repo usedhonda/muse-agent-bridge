@@ -40,10 +40,15 @@ local ignored state, never in this file.
   the three-second ACK deadline or guaranteed Slack replay; see `docs/design.md`.
 - Configuration credential-key validation now traverses lists as well as
   mappings. Error messages identify the key path, never its value.
-- Offline regression suite: 53 tests passed, including injected membership
+- Offline regression suite: 58 tests passed, including injected membership
   and storage failures, duplicate delivery, ACK/reaction failures, and nested
   list credential-key checks. These changes have not been deployed or verified
   against live Slack/Muse.
+- The in-memory duplicate set is updated after primary queue fsync, before
+  secondary seen-ID persistence. A failed secondary write still raises, but
+  same-process redelivery no longer appends the already durable event again.
+  Failed primary writes/fsync do not mark an event seen. This is not a guarantee
+  of exactly-once delivery or recovery of durability-uncertain primary writes.
 - Explicit `agentChannels` room-to-agent allowlists permit natural agent
   conversation without admitting agents into DMs or other rooms. Exact
   private/unshared membership is checked before intake and before replies.
