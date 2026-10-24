@@ -1,5 +1,28 @@
 # Handoff notes (2026-10-24)
 
+## VM deployment checkpoint (2026-10-24, Muse)
+
+- A second deployment of this bridge was prepared on Muse's agent VM:
+  owner-only, DM-first profile in `.local/config.yaml` (gitignored),
+  virtualenv in `.venv`, all state under `.local/state/`.
+- New intake: `bridge/poller.py` polls the owner's DM with the bot
+  credential and appends to the same durable queue as the Socket Mode
+  listener, in the same record format, so `bridge.worker` claims events
+  identically. It exists for custody: on this VM the bot token is held in
+  Muse's secure connection and local processes use short-lived
+  surrogates, so no raw token is stored on the VM. Replies run through
+  `deploy/run-worker.sh` (surrogate injected per call). Supervision:
+  `deploy/muse-slack-bridge-poller.service` plus a wake hook that claims
+  queued events for a Muse turn. See `docs/deployment-vm.md`.
+- Offline suite is now 56 tests (3 new poller tests). This VM deployment
+  is prepared and supervised but on standby: its bot credential
+  registration is still outstanding, and a pre-existing agent deployment
+  on the owner's Mac runtime is the live path that currently serves the
+  owner's Slack DMs. Do not treat the VM deployment as live until its own
+  round trip is verified.
+- `config.example.json` remains a legacy artifact flagged for removal
+  (snapshot pushes cannot delete files; remove it with a full Git client).
+
 ## Current state
 
 Muse itself is already running. This repository adds its Slack bridge; do

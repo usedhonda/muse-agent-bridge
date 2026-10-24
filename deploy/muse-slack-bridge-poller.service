@@ -1,0 +1,22 @@
+# systemd service for the polling intake on Muse's agent VM.
+# Installed to /etc/systemd/system/muse-slack-bridge-poller.service by the
+# wake hook's watchdog when missing (VM replacements wipe /etc; the copy
+# in this repository is the source of truth).
+# The bot credential is vault-held (custom.slack-muse-bot); the poller
+# fetches an hsurr:* surrogate from authd per request, so this unit needs
+# no secret environment at all. Until the credential is registered the
+# poller idles with logged errors and starts working on its own once the
+# credential exists.
+[Unit]
+Description=muse-slack-bridge polling intake (owner DM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/hatch/muse-slack-bridge
+ExecStart=/home/hatch/muse-slack-bridge/.venv/bin/python -m bridge.poller --config /home/hatch/muse-slack-bridge/.local/config.yaml --state /home/hatch/muse-slack-bridge/.local/state --interval 20
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
