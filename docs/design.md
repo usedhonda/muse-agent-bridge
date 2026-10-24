@@ -57,8 +57,9 @@ Slack workspace
    ▼
 listener (service on the Muse VM)
    │  1. verifies the event is from the owner (see below); drops everything else
-   │  2. posts an immediate ack reaction (owner's conversations only)
-   │  3. appends the event to a durable local queue
+   │  2. verifies configured private agent-room membership before retention
+   │  3. appends the accepted event to a durable local queue
+   │  4. acknowledges the Socket Mode envelope, then optionally reacts
    ▼
 .local/state/queue            (local only, never committed)
    │  wake hook polls the queue every 5 s (minimum interval)
@@ -74,8 +75,27 @@ Slack workspace
 
 Latency budget (targets, not guarantees): socket-to-queue under a second,
 queue detection within one 5-second hook poll, a typical end-to-end reply in
-seconds to tens of seconds including model time. The ack reaction is posted by
-the listener itself, so "seen" feedback is effectively immediate.
+seconds to tens of seconds including model time. An optional receipt reaction
+is posted only after queue durability; it is separate from the protocol ACK.
+
+### Intake durability and ACK limits
+
+Definitively rejected events are protocol-ACKed and discarded without retaining
+their bodies. Accepted events are ACKed only after the queue append succeeds
+(or confirms an already durable duplicate). Membership lookup or storage
+exceptions leave the envelope unacknowledged. A later reaction failure cannot
+undo the durable queue entry. No unauthorized event body is queued merely to
+speed up ACK.
+
+Slack expects ACK within three seconds. The synchronous membership lookup and
+filesystem operations can exceed that budget; this change does not establish
+a latency guarantee. Withholding ACK permits retry behavior, but does not
+guarantee recovery across disconnections or an outage. Failed membership API
+responses raise a connection error instead of becoming a definite rejection.
+Do not claim exactly-once intake or lossless replay.
+
+Protocol references: [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/)
+and [the official three-second ACK example](https://docs.slack.dev/tools/java-slack-sdk/guides/socket-mode/#under-the-hood).
 
 ## Access control (audience model)
 
@@ -185,8 +205,9 @@ in committed files, examples, fixtures, or docs.
   owner typing.
 - Reply targets are pinned to the originating channel/thread of the accepted
   event. The agent cannot redirect a reply to a different channel.
-- Dedupe by Slack event ID; Socket Mode envelopes are acked immediately and
-  processed idempotently, so redelivery never produces a duplicate reply.
+- Dedupe by Slack event ID after durable intake. Accepted Socket Mode envelopes
+  are ACKed after persistence; known duplicates are ACKed without another queue
+  entry. Worker delivery uncertainty still requires deliberate reconciliation.
 - Kill switch: disabling the wake hook and stopping the listener stops all
   behavior; revoking the app installation or either token disables the
   bridge entirely without affecting anything else on the VM.
@@ -231,3 +252,4 @@ in committed files, examples, fixtures, or docs.
 - OQ-2: per-thread memory. How much thread history the worker turn should
   load by default, and where the boundary sits between bridge state
   (`.local/`) and the agent's own memory.
+

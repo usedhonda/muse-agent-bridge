@@ -53,6 +53,9 @@ def _check_no_secrets(node, path: str = "") -> None:
             if any(part in lowered for part in _FORBIDDEN_KEY_PARTS):
                 raise ValueError(f"credential-like key not allowed in config: {path}{key}")
             _check_no_secrets(value, f"{path}{key}.")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _check_no_secrets(value, f"{path}{index}.")
 
 
 def _valid_scope(scope: str, audience_id: str) -> bool:
@@ -101,3 +104,4 @@ def load_config(path: str | Path) -> BridgeConfig:
         ack_reaction=raw.get("ackReaction", "eyes"),
         audiences=audiences,
     )
+

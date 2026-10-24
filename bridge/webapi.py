@@ -45,15 +45,18 @@ class SlackWebClient:
 
     def private_room_matches(self, channel: str, expected: set[str]) -> bool:
         info = self._get("conversations.info", {"channel": channel})
+        if info.get("ok") is not True:
+            raise ConnectionError("private-room info lookup failed")
         room = info.get("channel", {})
-        if (not info.get("ok") or not room.get("is_private")
+        if (not room.get("is_private")
                 or room.get("is_im") or room.get("is_mpim") or room.get("is_archived")
                 or room.get("is_shared") or room.get("is_ext_shared")
                 or room.get("is_org_shared") or room.get("pending_shared")):
             return False
         members = self._get("conversations.members", {"channel": channel, "limit": 200})
-        return (members.get("ok") is True
-                and not members.get("response_metadata", {}).get("next_cursor")
+        if members.get("ok") is not True:
+            raise ConnectionError("private-room membership lookup failed")
+        return (not members.get("response_metadata", {}).get("next_cursor")
                 and set(members.get("members", [])) == expected)
 
     def has_thread(self, channel: str, timestamp: str) -> bool:
@@ -84,3 +87,4 @@ class SlackWebClient:
         # already_reacted is fine; anything else is worth surfacing in logs.
         if not result.get("ok") and result.get("error") != "already_reacted":
             raise RuntimeError(f"reactions.add failed: {result.get('error')}")
+
