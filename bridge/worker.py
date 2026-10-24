@@ -10,9 +10,18 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 from .config import load_config
 from .store import EventStore
+
+# A claimed turn that never finishes (its runtime died, the session was
+# replaced, ...) must not block its conversation forever: per-conversation
+# ordering means one zombie claim silences every later message behind it.
+# Claims older than this are treated as abandoned and released on the
+# next claim pass. 900s is comfortably above the longest observed
+# legitimate turn (~9 min) and short enough to unblock a dead queue.
+CLAIM_TTL_SECONDS = 900
 
 
 class Worker:
@@ -25,6 +34,9 @@ class Worker:
         self.db.execute("""CREATE TABLE IF NOT EXISTS jobs (
             event_id TEXT PRIMARY KEY, record TEXT NOT NULL,
             status TEXT NOT NULL, reply TEXT, slack_ts TEXT)""")
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(jobs)")}
+        if "claimed_at" not in columns:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN claimed_at REAL")
         self.db.commit()
 
     def close(self):
@@ -62,6 +74,15 @@ class Worker:
         records = self.store.read_queue()
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
+            # Release abandoned claims first (see CLAIM_TTL_SECONDS): the
+            # job row is deleted, so the queue record can be claimed again.
+            # 'sending' rows are NOT touched; their delivery is uncertain
+            # and still goes through reconcile.
+            self.db.execute(
+                "DELETE FROM jobs WHERE status='claimed' AND "
+                "(claimed_at IS NULL OR claimed_at < ?)",
+                (time.time() - CLAIM_TTL_SECONDS,),
+            )
             for record in records:
                 if not self._allowed(record):
                     continue
@@ -72,8 +93,9 @@ class Worker:
                        for other in active):
                     continue  # preserve turn order and history within each thread
                 inserted = self.db.execute(
-                    "INSERT OR IGNORE INTO jobs(event_id, record, status) VALUES (?, ?, 'claimed')",
-                    (record["event_id"], json.dumps(record)),
+                    "INSERT OR IGNORE INTO jobs(event_id, record, status, claimed_at) "
+                    "VALUES (?, ?, 'claimed', ?)",
+                    (record["event_id"], json.dumps(record), time.time()),
                 ).rowcount
                 if inserted:
                     return self._packet(record)
@@ -121,6 +143,10 @@ class Worker:
         record = json.loads(job["record"])
         if not self._allowed(record):
             raise ValueError("event no longer allowed by current config")
+        with self.db:
+            # A resumed turn is alive again; restart its claim lease.
+            self.db.execute("UPDATE jobs SET claimed_at=? WHERE event_id=?",
+                            (time.time(), event_id))
         return self._packet(record)
 
     def reconcile(self, event_id, sent_ts=None):

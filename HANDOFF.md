@@ -123,3 +123,15 @@ local ignored state, never in this file.
 - State: code complete, 61 offline tests pass. The listener goes live
   when the owner registers the app-level token (xapp) as the
   custom.slack-muse-app secure connection.
+
+## Checkpoint 2026-10-24 (late): claim TTL + agent-room intake
+
+- Worker claims now carry a lease (claimed_at, CLAIM_TTL_SECONDS=900):
+  claim() releases abandoned 'claimed' jobs so a dead wake turn can no
+  longer silence a conversation (observed live: two zombie claims
+  blocked the quartet queue for hours). 'sending' rows are untouched;
+  they still require reconcile. 64 offline tests pass.
+- The app-level token arrived out-of-band (owner-directed) and the
+  resident Socket Mode listener is LIVE on the VM. The VM deployment
+  also enables agentChannels for the quartet (KAI, Chi) so agent posts
+  wake turns as conversation; the poller runs only as fallback.
