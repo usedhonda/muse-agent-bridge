@@ -2,6 +2,9 @@
 
 ## Repository improvement checkpoint (supersedes historical behavior below)
 
+- Listener retries transient startup authentication failures with a limit,
+  normalizes WebSocket failures for reconnect, and supports opt-in metadata-only
+  intake diagnostics. Process supervision remains deployment-specific.
 - Long-running claims are never automatically replayed by age. The 15-minute
   threshold is diagnostic only; verify the previous runtime stopped before
   deliberate continuation with `resume`.
@@ -13,7 +16,7 @@
   same local state directory and updated writers; separate hosts are not coordinated.
 - README and VM guide describe setup and operator-selected profiles rather
   than treating historical deployment receipts as current configuration.
-- Offline suite: 71 tests passed, including a real two-process handover race
+- Offline suite: 77 tests passed, including a real two-process handover race
   and long-running claim regression. No runtime deployment or live acceptance
   was performed for this checkpoint. Existing independent draft PRs remain separate.
 

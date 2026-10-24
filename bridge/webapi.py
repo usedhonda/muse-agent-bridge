@@ -30,6 +30,10 @@ class SlackWebClient:
 
     def auth_test(self) -> str:
         result = self._post("auth.test", {})
+        if not result.get("ok") and result.get("error") in {
+            "internal_error", "fatal_error", "service_unavailable", "ratelimited",
+        }:
+            raise ConnectionError("auth.test temporarily unavailable")
         if not result.get("ok") or not result.get("bot_id") or not result.get("user_id"):
             raise RuntimeError("auth.test did not verify a bot identity")
         self._bot_user_id = result["user_id"]

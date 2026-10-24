@@ -71,6 +71,18 @@ If using supervision, explicitly configure its secure injector and interpreter.
 The supplied listener systemd template invokes `/usr/bin/python3`, not `.venv`;
 do not assume dependencies installed into `.venv` are visible to that service.
 
+Check that the target runtime actually supports a systemd user manager before
+choosing that template. Some hosted agent VMs do not provide a user bus. A
+background process started manually is not persistent supervision. On such a
+runtime, the operator must configure its supported lifecycle/wake-hook mechanism
+to invoke the secure launcher, avoid starting a second listener when one is
+already alive, and verify recovery after a real runtime restart. This repository
+does not supply a portable keeper for that lifecycle; document the target-specific
+registration and rollback before claiming unattended recovery. If supervision is
+unavailable, describe the deployment as manual-start rather than auto-recovering.
+The launch command above also serves as the manual recovery entry after checking
+for an existing listener; preserve `.local/` and reconcile unfinished work first.
+
 Register a runtime hook to call the worker no faster than every five seconds:
 
 ```sh
@@ -88,6 +100,26 @@ different properties: verify both. Merely creating a new session does not
 prove that it avoids a global runtime execution queue.
 
 ## 5. Diagnose by stage
+
+Opt into metadata-only intake diagnostics while investigating silent drops:
+
+```sh
+sh deploy/run-listener.sh --diagnostics
+```
+
+For generic secure token injection, add `--diagnostics` to the listener CLI.
+Stderr emits JSON stage/reason and UTC time, plus event ID/message timestamp
+only when their formats validate. Bodies, sender/channel IDs, tokens and raw
+exception details are excluded. `dropped` reasons include `no-mention`,
+`no-audience`, `unapproved-bot` and `private-room-mismatch`; `queued` and
+`duplicate` follow durable intake. No pre-drop body is saved. Keep diagnostic
+logs local and protected. This instrumentation cannot explain past drops that
+occurred before it was enabled, and it does not measure runtime execution.
+
+Startup authentication retries transient network/API failures up to five times
+with bounded backoff; invalid bot identity/credentials fail closed. WebSocket
+connection exceptions and empty receives trigger reconnect. These are recovery
+inside the listener process, not process supervision after a runtime restart.
 
 Use event identifiers and timestamps, not message bodies or credentials.
 

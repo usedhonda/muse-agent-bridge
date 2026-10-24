@@ -8,7 +8,7 @@ Offline evidence is not live acceptance; compare deployed source separately.
 | --- | --- | --- | --- |
 | Setup path | README lacks an end-to-end beginner path | Link getting-started; test on a clean supported VM | Documented; clean live setup pending |
 | Runtime support | Launchers depend on a Muse-specific credential module | Declare supported runtime and show a clear prerequisite failure | Documented; poller adapter now lazy with clear error |
-| Python service | Listener unit invokes system Python while setup uses a venv | Choose one supported interpreter path and verify supervised startup | Documented template caveat; supervisor verification pending |
+| Python service | Listener unit invokes system Python while setup uses a venv | Choose one supported interpreter path and verify supervised startup | Documented template/user-bus/manual-start caveats; lifecycle keeper remains external |
 | Credentials | App and bot registration are separate steps | Distinguish missing app credential from bot failure without exposing values | Documented; actual registrations pending operator verification |
 | Config examples | YAML/legacy JSON have different reaction defaults | Retire JSON or make its obsolete status unambiguous | YAML documented as current; JSON retirement remains |
 | Hook scheduling | `hookPollIntervalSec` is not consumed by the loader | Document real scheduler setup; do not imply config alone registers it | Documented; runtime scheduling remains external |
@@ -24,8 +24,8 @@ Offline evidence is not live acceptance; compare deployed source separately.
 | Intake dedupe | `EventStore` caches seen keys per process without interprocess locking | Reproduce listener/poller overlap; use atomic durable uniqueness | Fixed: append lock plus persisted refresh; two-process regression passes |
 | ACK timing | Membership API and fsync precede protocol ACK | Measure three-second deadline; do not assume Slack replay guarantees | Pending operator/runtime acceptance |
 | Room replies | Blank acknowledgements can trigger pointless bot exchanges | Preserve skip; test substantive collaboration without empty response loops | Skip preserved; live conversational acceptance pending |
-| Diagnostic visibility | Connected/queued/running/sent are different states | Expose metadata-only stage status and waiting owner/reason | Added worker status counts/tail hints; runtime start/end instrumentation remains |
-| Validation | Source tests cannot establish installed runtime acceptance | Record offline, deployed and end-to-end results separately | 71 offline tests pass; deployment/live acceptance not performed |
+| Diagnostic visibility | Connected/queued/running/sent are different states | Expose metadata-only stage status and waiting owner/reason | Added worker status and opt-in intake drop reasons; runtime start/end instrumentation remains |
+| Validation | Source tests cannot establish installed runtime acceptance | Record offline, deployed and end-to-end results separately | 77 offline tests pass; deployment/live acceptance not performed |
 
 [Getting started](getting-started.md) and the [worker contract](worker.md) cover
 setup and diagnosis. Draft PRs #2 (secondary seen-ID persistence) and #3 (queued

@@ -39,4 +39,4 @@ if [ -z "$APP" ]; then
 fi
 SLACK_BOT_TOKEN="$BOT" SLACK_APP_TOKEN="$APP" \
   exec .venv/bin/python -m bridge.listener \
-  --config .local/config.yaml --state .local/state
+  --config .local/config.yaml --state .local/state "$@"
