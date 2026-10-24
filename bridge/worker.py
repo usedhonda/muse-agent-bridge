@@ -152,7 +152,7 @@ class Worker:
             record = json.loads(job["record"])
             if not self._allowed(record):
                 raise ValueError("event no longer allowed by current config")
-            thread = record["thread_ts"]
+            thread = record["thread_ts"] if self.cfg.reply_in_threads else None
             if "reply_thread_ts" in record:
                 audience = self.cfg.audience_for_sender(record["user"], record["channel"])
                 members = (audience.user_ids | audience.agent_channels[record["channel"]]

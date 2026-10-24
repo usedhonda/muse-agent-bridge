@@ -54,6 +54,7 @@ class Listener:
                 return
             record = {
                 "event_id": payload.get("event_id"),
+                "transport": "socket",
                 "audience_id": decision.audience.id,
                 "scope": decision.audience.scope,
                 "channel": event.get("channel"),

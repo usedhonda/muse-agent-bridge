@@ -104,3 +104,22 @@ local ignored state, never in this file.
   services, and end-to-end acceptance are distinct states. Report each
   accurately. Public pushes require the owner's explicit publication GO.
 
+
+## Checkpoint 2026-10-24 (evening): resident Socket Mode listener
+
+- The bridge is live on the VM via wake-hook intake (history poller).
+  This deployment posts replies at channel top level
+  (`replyInThreads: false` locally; the code default remains threaded).
+- Resident listener: `bridge/listener.py` + `bridge/transport.py`
+  implement Socket Mode; the transport now honors `HTTPS_PROXY`
+  (runtime egress) for the WSS connection. `deploy/run-listener.sh`
+  injects both vault surrogates (bot: custom.slack-muse-bot; app:
+  custom.slack-muse-app) and exits 3 until the app credential exists.
+- The wake hook doubles as the listener keeper: it (re)launches the
+  listener in-session when the app credential is registered, and runs
+  the poller only while the listener is down. EventStore dedupes
+  (channel, ts) across transports (records name their transport:
+  socket/poll), so handover never double-queues.
+- State: code complete, 61 offline tests pass. The listener goes live
+  when the owner registers the app-level token (xapp) as the
+  custom.slack-muse-app secure connection.

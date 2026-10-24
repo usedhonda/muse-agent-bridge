@@ -25,7 +25,21 @@ class EventStore:
                 if line.strip()
             }
         # Recover the crash window between the queue fsync and seen-ID fsync.
-        self._seen.update(record["event_id"] for record in self.read_queue())
+        queued = self.read_queue()
+        self._seen.update(record["event_id"] for record in queued)
+        # The same Slack message can arrive through two transports (Socket
+        # Mode listener and history poller) under different event IDs.
+        # (channel, ts) identifies the message itself; when both records
+        # name their transport and the transports differ, the second copy
+        # is a handover duplicate and must not queue twice. Records that
+        # do not name a transport keep plain event-ID semantics.
+        self._seen_messages: dict[tuple[str, str], str] = {}
+        for record in queued:
+            channel, ts, transport = (record.get("channel"), record.get("ts"),
+                                      record.get("transport"))
+            if (isinstance(channel, str) and isinstance(ts, str)
+                    and isinstance(transport, str)):
+                self._seen_messages.setdefault((channel, ts), transport)
 
     def append(self, record: dict) -> bool:
         """Append a record; returns False (and writes nothing) on duplicate."""
@@ -34,6 +48,13 @@ class EventStore:
             raise ValueError("event_id must be a nonempty string")
         if event_id in self._seen:
             return False
+        message_key = (record.get("channel"), record.get("ts"))
+        transport = record.get("transport")
+        if (isinstance(message_key[0], str) and isinstance(message_key[1], str)
+                and isinstance(transport, str)):
+            owner = self._seen_messages.get(message_key)  # type: ignore[arg-type]
+            if owner is not None and owner != transport:
+                return False
         if self.queue_path.exists() and self.queue_path.stat().st_size:
             with self.queue_path.open("rb") as tail:
                 tail.seek(-1, 2)
@@ -52,6 +73,9 @@ class EventStore:
 
             os.fsync(fh.fileno())
         self._seen.add(event_id)
+        if (isinstance(message_key[0], str) and isinstance(message_key[1], str)
+                and isinstance(transport, str)):
+            self._seen_messages.setdefault(message_key, transport)  # type: ignore[arg-type]
         return True
 
     def read_queue(self) -> list[dict]:

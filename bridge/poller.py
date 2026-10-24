@@ -98,6 +98,7 @@ class Poller:
                     continue
                 record = {
                     "event_id": f"slack:{channel}:{ts}",
+                    "transport": "poll",
                     "audience_id": "owner",
                     "scope": "owner",
                     "channel": channel,

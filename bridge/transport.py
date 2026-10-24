@@ -3,11 +3,17 @@
 Opens an `apps.connections.open` URL with the app-level token and speaks
 the Socket Mode envelope protocol over WSS. Only outbound connections are
 made, which is what the agent VM allows.
+
+When HTTPS_PROXY/https_proxy is set (the Muse runtime egress), the WSS
+connection is made through that HTTP CONNECT proxy; Slack's WSS host is
+not necessarily reachable directly from the VM.
 """
 from __future__ import annotations
 
 import json
+import os
 import urllib.request
+from urllib.parse import urlparse
 
 
 def open_connection_url(app_token: str) -> str:
@@ -36,7 +42,20 @@ class SocketModeTransport:
             raise RuntimeError(
                 "websocket-client is required; see requirements.txt"
             ) from exc
-        self._ws = websocket.create_connection(open_connection_url(self._app_token))
+        options: dict = {}
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        if proxy:
+            parsed = urlparse(proxy)
+            if parsed.hostname:
+                options["http_proxy_host"] = parsed.hostname
+            if parsed.port:
+                options["http_proxy_port"] = parsed.port
+            if parsed.username:
+                options["http_proxy_auth"] = (parsed.username, parsed.password or "")
+            options["proxy_type"] = "http"
+        self._ws = websocket.create_connection(
+            open_connection_url(self._app_token), **options
+        )
 
     def receive(self) -> dict:
         raw = self._ws.recv()

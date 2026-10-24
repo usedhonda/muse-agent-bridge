@@ -31,6 +31,10 @@ class BridgeConfig:
     deployment: str
     ack_reaction: str | None
     audiences: list[Audience]
+    # Owner preference (2026-10-24): replies go to the channel top level,
+    # not into threads. Deployments opt out with replyInThreads: false;
+    # the default preserves the original threaded behavior.
+    reply_in_threads: bool = True
 
     def audience_for_user(self, user_id: str) -> Audience | None:
         for audience in self.audiences:
@@ -103,5 +107,6 @@ def load_config(path: str | Path) -> BridgeConfig:
         deployment=str(raw.get("deployment", "unspecified")),
         ack_reaction=raw.get("ackReaction", "eyes"),
         audiences=audiences,
+        reply_in_threads=bool(raw.get("replyInThreads", True)),
     )
 
