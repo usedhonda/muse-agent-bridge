@@ -2,7 +2,8 @@
 
 Both live under the state dir (inside `.local/` in real deployments).
 Writes are fsync'd so a queued event survives a listener restart; event
-IDs are deduplicated across restarts (Slack redelivers on reconnect).
+IDs are deduplicated across restarts if Slack redelivers an event. Replay
+after a disconnection is not guaranteed by this local store.
 """
 from __future__ import annotations
 
@@ -61,3 +62,4 @@ class EventStore:
             for line in self.queue_path.read_bytes().splitlines(keepends=True)
             if line.endswith(b"\n") and line.strip()
         ]
+

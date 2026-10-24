@@ -1,10 +1,14 @@
 """Socket Mode listener: gate, dedupe, queue, ack reaction.
 
 Flow per envelope (design: docs/design.md):
-  1. Acknowledge the envelope immediately (Socket Mode protocol).
-  2. Resolve the event to an audience; drop silently if none.
-  3. Append to the durable queue (deduplicated by event_id).
+  1. Resolve the event to an audience; ACK and drop silently if none.
+  2. Verify configured private-room membership before retaining any body.
+  3. Append to the durable queue (deduplicated by event_id), then ACK.
   4. Only then post the ack reaction, so "seen" implies "queued".
+
+A validation or storage exception leaves the envelope unacknowledged; this
+avoids confirming receipt of an event we cannot retain safely. Slow membership
+checks can exceed Slack's ACK deadline; this is not a delivery guarantee.
 
 Tokens come from the environment (SLACK_APP_TOKEN / SLACK_BOT_TOKEN),
 injected by the service wrapper from the secure connection. They are
@@ -36,18 +40,17 @@ class Listener:
     def handle_envelope(self, envelope: dict, send_ack) -> None:
         envelope_type = envelope.get("type")
         if envelope_type == "events_api":
-            # Socket Mode requires a prompt envelope ack regardless of the
-            # audience decision; it is protocol-level, invisible to users.
-            send_ack(envelope["envelope_id"])
             payload = envelope["payload"]
             event = payload.get("event", {})
             decision = resolve_event(self.cfg, event, self.bot_user_id)
             if not decision.accepted:
+                send_ack(envelope["envelope_id"])
                 return  # silent drop: no queue entry, no reaction, no body kept
             agents = decision.audience.agent_channels.get(event.get("channel"))
             if agents and (self.bot_user_id in agents or not self.web.private_room_matches(
                 event["channel"], decision.audience.user_ids | agents | {self.bot_user_id}
             )):
+                send_ack(envelope["envelope_id"])
                 return
             record = {
                 "event_id": payload.get("event_id"),
@@ -67,7 +70,11 @@ class Listener:
                     thread = event.get("ts")
                 record.update(reply_thread_ts=thread, conversation_ts=thread or "",
                               bot_user_id=self.bot_user_id)
-            if self.store.append(record) and self.cfg.ack_reaction:
+            appended = self.store.append(record)
+            # Duplicate IDs are already durable; ACK them too. Exceptions above
+            # must not ACK an event whose verification or persistence failed.
+            send_ack(envelope["envelope_id"])
+            if appended and self.cfg.ack_reaction:
                 self.web.reactions_add(
                     record["channel"], record["ts"], self.cfg.ack_reaction
                 )
@@ -114,3 +121,4 @@ def main() -> None:  # pragma: no cover - live entry point
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
