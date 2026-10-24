@@ -1,7 +1,10 @@
 # Deployment on Muse's agent VM (owner-DM profile)
 
-This is the deployment that replaced the earlier Mac-runtime deployment.
-It exists so the bridge does not depend on the owner's Mac being awake.
+This is a second, standby deployment prepared on Muse's agent VM so the
+bridge does not depend on the owner's Mac being awake. The pre-existing
+Mac-runtime deployment is currently the live path for the owner's Slack
+DMs; this VM deployment takes over once its bot credential registration
+(see "Credential custody") is complete and its own round trip is verified.
 
 ## Shape
 
