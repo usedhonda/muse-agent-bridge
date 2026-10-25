@@ -1,10 +1,11 @@
 """Polling intake for deployments where the bot credential is vault-held.
 
-The Socket Mode listener (bridge/listener.py) needs the raw app token in
-its environment. On Muse's agent VM the bot token instead lives in the
+The Socket Mode listener (bridge/listener.py) needs an app credential
+injected into its environment. On Muse's agent VM the bot token instead lives in the
 secure connection as `custom.slack-muse-bot`; local processes receive an
 `hsurr:*` surrogate from authd and the egress layer swaps it for the real
-token on requests to slack.com. No raw token is ever stored on this VM.
+token at authorized egress. Real credentials are not exposed to the
+agent/runtime cell; they are held in a separate security domain in the VM.
 
 This poller is the matching intake for that custody model: it polls the
 owner's DM channel (and ordinary allowlisted channels, excluding agentChannels) with the bot
@@ -14,8 +15,8 @@ Socket Mode listener writes, in the same record format, so
 
 Trade-off: intake latency is the poll interval (default 20s) instead of
 Socket Mode's push. Custody and stability win for this deployment; the
-Socket Mode listener remains the upgrade path when a raw-token injection
-route is sanctioned.
+Socket Mode listener requires an approved app-credential injection and
+WSS route; credential custody alone does not establish lifecycle support.
 """
 from __future__ import annotations
 

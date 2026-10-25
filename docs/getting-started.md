@@ -65,7 +65,11 @@ On the supported Muse VM, the secure launcher starts Socket Mode:
 sh deploy/run-listener.sh
 ```
 
-Exit code 3 means a required credential is unavailable. It does not mean the
+Exit code 3 means a required credential is unavailable to this invocation.
+The launcher collapses all helper exceptions to empty results, so its app-message
+wording "not registered yet" does not establish that cause. See
+[credential diagnostic limits](runtime-lifecycle.md#existing-launcher-diagnostic-ambiguity).
+It does not mean the
 listener is connected. Check credential registration without printing values.
 If using supervision, explicitly configure its secure injector and interpreter.
 The supplied listener systemd template invokes `/usr/bin/python3`, not `.venv`;

@@ -30,6 +30,8 @@ into worker reply commands too; `deploy/run-worker.sh` is the corresponding
 VM-specific example. Never put credentials in config, units, logs or commits.
 Runtime-specific connection names and helper paths in the launchers must be
 provisioned or adapted locally; these files do not register credentials for you.
+Custom Connector support does not by itself establish credential eligibility
+for an independent service; consult the [verified Muse boundaries and unknowns](runtime-lifecycle.md#muse-public-architecture-and-integration-unknowns).
 
 ## Supervision and paths
 

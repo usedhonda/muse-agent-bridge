@@ -1,7 +1,8 @@
 #!/bin/sh
 # Run bridge.listener (Socket Mode) with both credentials injected as
 # vault surrogates. The egress layer swaps each hsurr:* value for the
-# real token on requests to slack.com; raw tokens never exist on this VM.
+# real token at authorized egress; real credentials are not exposed to the
+# agent/runtime cell. They are held in a separate security domain in the VM.
 #
 # Credentials:
 #   SLACK_BOT_TOKEN <- secure connection "custom.slack-muse-bot"

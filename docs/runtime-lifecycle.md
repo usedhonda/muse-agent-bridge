@@ -6,6 +6,28 @@ turn need separate lifecycle owners. If a platform terminates a check together
 with its children, starting the listener or a long model turn inside that check
 does not create a durable service.
 
+## Muse public architecture and integration unknowns
+
+The September 8, 2026 [Meta security article](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse)
+describes Hatch and agent tools inside a `systemd-nspawn` runtime cell. Runtime
+root is not host root. Authd, privileged connector workers and Sentinel sit
+outside it. Authd supplies surrogates; Sentinel inserts real credentials after
+authorizing egress. Unix-socket peer ACLs and built-in-worker cgroup/credential allowlists
+constrain access. Real credentials remain outside the agent/runtime cell, rather
+than being absent from the entire VM.
+
+Meta's [Connector help](https://www.meta.com/help/superintelligence/1687253048996149/)
+supports Custom Connectors and a Secure Credentials Store. It does not document
+this bridge's helper API or an independent service's credential eligibility.
+
+Integration inference: Linux/systemd and product background-agent capabilities
+do not establish support for an arbitrary runtime-cell daemon. These sources do
+not establish child-process lifetime, any particular check/tool timeout, restart
+persistence or credential injection into a separately launched service. Obtain
+the target runtime's lifecycle and custom-connector execution contracts before
+selecting that adapter. Unknown support is not proof that support is absent.
+Public architecture is not an inventory of the currently deployed runtime.
+
 ## What this repository supplies
 
 | Component | Existing behavior | Remaining integration |
@@ -22,6 +44,23 @@ itself after the platform kills that process. Process existence alone also does
 not establish an active Slack connection or a functioning runtime dispatcher.
 The repository does not supply a generic connection-health API or portable
 lifecycle keeper for a hosted runtime.
+
+## Existing launcher diagnostic ambiguity
+
+`deploy/run-listener.sh` catches every exception from either credential lookup
+and substitutes an empty string. Exit 3 therefore means that a credential is
+unavailable to this invocation; it does not distinguish missing registration,
+execution-identity refusal, helper failure or a temporary problem. In particular,
+the current app-credential message says "not registered yet", but that cause is
+not established by this code. Authentication and connection have not succeeded
+at that checkpoint.
+
+The helper's documented error contract is not included here. Do not invent
+error classes, classify all helper failures as transient, or infer permission
+from an empty result. Obtain its supported sanitized error/context categories
+from runtime documentation before refining recovery. This documentation update
+does not change helper calls, exception handling, credentials or access policy.
+Never print returned values, raw exceptions or environment dumps for diagnosis.
 
 ## Separate the three owners
 
