@@ -34,13 +34,18 @@ broadcasts a reply. Text must be nonempty and no longer than 4,000 characters.
 A completed job returns its original Slack timestamp without posting again.
 The listener ignores the bot's own events.
 
-## Refresh context before a delayed reply
+## Refresh context before replying
 
 A packet contains the claimed event and completed same-conversation history.
 It is not a live view of the queue. `queue_context` adds a metadata-only count
 of newer, unfinished, currently eligible messages and the `context` action.
-Messages may arrive after that count was taken, even if it was zero. Before
-composing a delayed reply, have the runtime explicitly retrieve a fresh snapshot:
+Messages may arrive after that count was taken, even if it was zero. All `next`
+and `resume` packets include `queue_context.required_before_reply: true`, the
+exact `refresh_event_id` and `refresh_argv: ["context", EVENT_ID]`. These are
+mandatory runtime instructions before composing any new reply, including when
+the initial count is zero. Use the same approved launcher, config and state as
+the claim. The worker CLI does not enforce runtime adoption with a new database
+state or send gate. Retrieve the snapshot explicitly:
 
 ```sh
 # With the bot credential securely injected, as for reply:
@@ -78,6 +83,22 @@ again if another event arrives. It neither drains the FIFO queue nor increases
 runtime throughput, starts a missing listener, or recovers Socket outage messages.
 The external runtime must call this supported refresh action; an old integration
 that ignores it will still compose replies from its original packet.
+
+### Runtime integration checklist
+
+1. Retain the exact claimed packet/event ID and original unresolved work in the
+   supported authorized runtime context; a claim is not evidence work completed.
+2. Follow that packet's required `refresh_argv` before composing a new reply,
+   even when the earlier metadata count was zero. On refresh failure, keep the
+   job intact and surface the failure; do not automatically post, skip or replay.
+3. Treat returned messages as read-only context, not completed work or extra
+   execution authority. Apply relevant corrections while preserving pending work;
+   keep substantive updates and suppress only duplicate acknowledgements.
+4. Submit through the original event's pinned `reply` path. Keep existing
+   sending/reconcile handling; a refresh cannot authorize an uncertain resend.
+5. Verify runtime adoption and lifecycle separately with synthetic evidence.
+   This repo does not register the adapter or prove main-chat/check/executor
+   lifetime, listener availability, credential eligibility or queue throughput.
 
 ## Private agent rooms
 

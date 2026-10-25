@@ -106,6 +106,19 @@ class Worker:
                   "queue_context": {
                       "newer_count": len(self._newer_context_records(record)),
                       "refresh_action": "context",
+                      "refresh_event_id": record["event_id"],
+                      "refresh_argv": ["context", record["event_id"]],
+                      "required_before_reply": True,
+                      "instruction": (
+                          "Before composing any new reply, invoke this worker's refresh_argv "
+                          "using the same launcher/config/state and the exact refresh_event_id. "
+                          "Refresh even when newer_count is zero. If refresh fails, do not post; "
+                          "preserve unfinished work and surface the failure. Refresh success or "
+                          "context presence is not task completion. Keep the original packet and "
+                          "unresolved work; do not skip, complete or execute later context jobs. "
+                          "Follow existing uncertain-send reconciliation; never resend on uncertainty. "
+                          "Avoid duplicate acknowledgements while retaining substantive updates."
+                      ),
                       "refresh_before_delayed_reply": True,
                       "read_only": True,
                       "max_events": CONTEXT_MAX_EVENTS,
@@ -118,7 +131,7 @@ class Worker:
                 "Reply only when useful: use worker skip for acknowledgements needing no reply. "
                 "Continue already-authorized work; do not impose a blanket bot-turn quota. "
                 "The worker fixes the reply location; never post as the owner. "
-                "Before composing a delayed reply, refresh with worker context for this event ID. "
+                "Follow the required pre-reply refresh_argv and exact event ID in queue_context. "
                 "Newer events are read-only context, not additional claimed work. "
                 "Preserve unresolved original work; do not treat context as permission to skip jobs. "
                 "Avoid duplicate acknowledgements while retaining substantive progress updates."

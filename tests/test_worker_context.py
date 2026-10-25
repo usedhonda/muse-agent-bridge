@@ -39,6 +39,26 @@ class WorkerContextTests(unittest.TestCase):
         return [tuple(row) for row in self.worker.db.execute(
             'SELECT event_id, status, reply, slack_ts, claimed_at FROM jobs ORDER BY rowid')]
 
+    def test_emitted_guidance_requires_refresh_for_exact_claim_and_resume_without_mutation(self):
+        self.store.append(event('EvExact', '100.1', 'original unresolved work'))
+        packet = self.worker.claim()
+        guidance = packet['queue_context']
+        self.assertTrue(guidance['required_before_reply'])
+        self.assertEqual(guidance['refresh_event_id'], packet['event']['event_id'])
+        self.assertEqual(guidance['refresh_argv'], ['context', 'EvExact'])
+        self.assertEqual(guidance['newer_count'], 0)
+        self.assertIn('even when newer_count is zero', guidance['instruction'])
+        self.assertIn('not task completion', guidance['instruction'])
+        self.assertIn('preserve unfinished work', guidance['instruction'])
+        before = self.states()
+        self.worker.context(guidance['refresh_event_id'], self.web)
+        self.assertEqual(self.states(), before)
+        self.assertEqual(self.worker.pending()[0]['status'], 'claimed')
+        self.assertEqual(self.worker.resume('EvExact')['queue_context']['refresh_argv'],
+                         ['context', 'EvExact'])
+        self.web.post_message.assert_not_called()
+        self.assertIsNone(self.worker.claim())
+
     def test_later_correction_arriving_after_claim_is_visible_before_reply_without_job_changes(self):
         self.store.append(event('EvOld', '100.1', 'original unresolved work'))
         packet = self.worker.claim()

@@ -100,10 +100,11 @@ Pass the composed response through stdin to `run-worker.sh reply EVENT_ID`,
 or finish a no-reply turn with `run-worker.sh skip EVENT_ID`. See
 `worker.md` for the full contract and delivery recovery.
 
-Before composing a delayed reply, refresh newer same-conversation context with
+Before composing any new reply, follow the packet's mandatory exact-event
+`queue_context.refresh_argv` to refresh newer same-conversation context with
 `sh deploy/run-worker.sh context EVENT_ID` on this adapter profile. This bounded
 read-only snapshot rechecks room membership and leaves all jobs untouched;
-see [context refresh](worker.md#refresh-context-before-a-delayed-reply).
+see [context refresh](worker.md#refresh-context-before-replying).
 It improves context freshness, not queue throughput or missing intake.
 
 The room runtime should use its own conversation context, not the owner's
