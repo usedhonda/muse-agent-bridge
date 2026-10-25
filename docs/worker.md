@@ -34,6 +34,51 @@ broadcasts a reply. Text must be nonempty and no longer than 4,000 characters.
 A completed job returns its original Slack timestamp without posting again.
 The listener ignores the bot's own events.
 
+## Refresh context before a delayed reply
+
+A packet contains the claimed event and completed same-conversation history.
+It is not a live view of the queue. `queue_context` adds a metadata-only count
+of newer, unfinished, currently eligible messages and the `context` action.
+Messages may arrive after that count was taken, even if it was zero. Before
+composing a delayed reply, have the runtime explicitly retrieve a fresh snapshot:
+
+```sh
+# With the bot credential securely injected, as for reply:
+python3 -m bridge.worker context EVENT_ID
+```
+
+On the supported credential-adapter profile, `sh deploy/run-worker.sh context
+EVENT_ID` injects the credential. The result is private conversation content;
+keep it in the authorized runtime context, not public logs or issue reports.
+The command requires an existing `claimed` job and rechecks current policy.
+For agent rooms it authenticates the same bot identity as the original event
+and verifies exact current private/unshared membership before returning text.
+Lookup failure or changed membership fails closed without changing jobs.
+
+The snapshot labels `read_only: true` and includes at most the **10 latest**
+eligible unfinished events in that same conversation, newer by exact Slack
+message timestamp. It keeps their chronological order, exact event IDs, authors
+(`user`), message/thread timestamps, intake time and source transport, with
+`provenance: local_durable_queue` and current job state. Room-level messages,
+individual threads, channels, scopes and audiences stay separate. Missing
+legacy provenance fields remain null, rather than being inferred. Each text is
+limited to 2,000 characters with `text_truncated`; `omitted_older_count` reports
+excluded older context when more than 10 events qualify.
+
+These records are context, **not additional claimed work or new authorization**.
+Use corrections to avoid a stale response while preserving unresolved original
+work. Do not automatically skip, finish, claim or execute those later jobs.
+They remain eligible for their own normal handling. Avoid duplicate acknowledgements,
+but keep substantive progress updates; this is not a one-reply quota. The original
+reply location and existing `sending`/reconciliation protection remain unchanged.
+A `sending` or `done` job cannot be refreshed with this action.
+
+This is a local snapshot, not Slack history backfill, and it can become stale
+again if another event arrives. It neither drains the FIFO queue nor increases
+runtime throughput, starts a missing listener, or recovers Socket outage messages.
+The external runtime must call this supported refresh action; an old integration
+that ignores it will still compose replies from its original packet.
+
 ## Private agent rooms
 
 An owner audience can opt specific rooms into `agentChannels`, mapping each
