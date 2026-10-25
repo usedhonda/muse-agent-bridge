@@ -186,6 +186,36 @@ retention plan for large deployments.
 
 ## Recovery
 
+Classify queue eligibility separately from job status before choosing recovery:
+
+| Last proven state | Supported handling | What must remain intact |
+| --- | --- | --- |
+| Eligible queue record, no job | Normal `next` can claim it when its conversation is available | Original event and dedupe identity |
+| Ineligible record, no job | Inspect source/config/routing metadata; no current worker command migrates it into an eligible job | Queue bytes, prior execution/delivery evidence and access policy |
+| Claimed, dispatcher proves runtime never started | `release --confirmed-not-started` returns it to normal acquisition | Event identity; do not generalize to post-start failures |
+| Claimed, execution started or outcome unknown | Establish the previous executor stopped, retain progress and deliberately `resume` | Original unresolved work and authorization |
+| Sending, arrival unknown | Check actual Slack destination, then explicit `reconcile` | Attempted reply and uncertainty protection |
+| Done | Use recorded completion/delivery metadata; task success needs separate evidence | History/deduplication records, including no-post completions |
+
+`pending` lists unfinished **jobs**, not unclaimed queue records. Pending zero
+therefore does not prove the queue is drained. Ineligible records can coexist
+with completed jobs, and old records may be ineligible under today's config.
+Use `status` to distinguish those categories on a compatible checkout. For
+read-only diagnosis of an older deployment, use read-only database/queue
+inspection or a protected consistent offline copy; do not initialize a newer
+Worker against a live database solely to inspect it.
+
+Legacy poll room records without `reply_thread_ts`/`bot_user_id` are rejected.
+They cannot be resumed, skipped, released, reconciled or replied to before a
+job exists. Even after upgrading, their durable message identity can dedupe a
+later Socket copy. Excluding rooms from new polling prevents future shadows;
+it does not migrate or replay that old backlog. Preserve those records and
+compare actual room authorization, runtime actions and Slack delivery before
+planning a deliberate per-record recovery. Do not delete queue/seen/job data,
+broaden access policy or invent missing metadata to make an old event runnable.
+This repository does not yet provide an automatic legacy-record migration or
+room/thread backfill path.
+
 Eligible events without claims are known to be unstarted and continue through
 `next` automatically. If the dispatcher receives a claim but can establish that
 it failed **before starting any runtime turn** (for example, process creation
