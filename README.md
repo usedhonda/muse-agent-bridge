@@ -76,13 +76,15 @@ turns deliberately before retrying external actions.
 1. Intake accepts an eligible DM or configured channel message into a durable queue.
 2. Your runtime uses the context-refreshing wake adapter, starts a model turn only for
    a non-null packet, and retains its `event.event_id`.
-3. Your runtime supplies the reply text to `python -m bridge.worker reply EVENT_ID`
+3. Your runtime supplies the reply text to `python -m bridge.worker reply EVENT_ID --context-receipt RECEIPT_ID`
    on stdin, or completes a no-reply turn with `skip EVENT_ID`.
 
-For example, with the bot credential injected:
+Refresh immediately before composing the reply and use the returned `receipt.id`
+as `RECEIPT_ID`. For example, with the bot credential injected:
 
 ```sh
-python -m bridge.worker reply EVENT_ID < .local/reply.txt
+python -m bridge.worker context EVENT_ID
+python -m bridge.worker reply EVENT_ID --context-receipt RECEIPT_ID < .local/reply.txt
 ```
 
 Reply text must be nonempty UTF-8 and at most 4,000 characters. Commands default
@@ -129,3 +131,10 @@ credentials belong in your approved secure connection or secret injector.
 - [Design](docs/design.md) — architecture, governance and milestones
 - [Slack manifest](slack-app-manifest.yaml) and [example config](config.example.yaml)
 - `bridge/` — implementation; `tests/` — offline tests
+
+New replies require a successful exact-claim context receipt, valid for 60 seconds.
+Pass `receipt.id` from `context EVENT_ID`; send refusal preserves the job.
+See [the worker contract](docs/worker.md#refresh-context-before-replying) for freshness, audit writes and no-retry boundaries.
+
+Room polling normalization remains a [review plan](docs/poll-room-normalization-plan.md);
+the current containment exclusion is not a claim that Socket Mode is permanently required.

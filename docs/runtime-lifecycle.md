@@ -6,6 +6,16 @@ turn need separate lifecycle owners. If a platform terminates a check together
 with its children, starting the listener or a long model turn inside that check
 does not create a durable service.
 
+## Establish the target before changing it
+
+Independently match the current native conversation to the intended target
+runtime before installation, recovery or acceptance. Existing SSH trust verifies
+an endpoint key, not that it is the active native conversation's deployment.
+Repository HEAD, matching logs or a peer report alone do not establish this
+mapping. Conflicting environment observations remain unresolved until verified;
+keep offline source tests distinct from live deployment evidence. Do not change
+keys, trust or connections to manufacture a match.
+
 ## Muse public architecture and integration unknowns
 
 The September 8, 2026 [Meta security article](https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse)

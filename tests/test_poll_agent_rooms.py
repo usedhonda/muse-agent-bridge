@@ -23,6 +23,7 @@ class PollRoomTests(unittest.TestCase):
                 poller = Poller(cfg, store, Path(directory) / 'poller.json')
                 poller.ensure_dm_channel = Mock(return_value='D_TEST')
                 web = Mock()
+                web.auth_test.return_value = "U_BOT"
                 web.private_room_matches.return_value = True
                 web.has_thread.return_value = False
                 web.post_message.return_value = "200.1"
@@ -57,7 +58,7 @@ class PollRoomTests(unittest.TestCase):
                     self.assertEqual(event['thread_ts'], thread or '100.1')
                     self.assertEqual(event['reply_thread_ts'], thread)
                     self.assertEqual(event['conversation_ts'], thread or '')
-                    worker.reply('EvTest', 'synthetic reply', web)
+                    worker.reply('EvTest', 'synthetic reply', web, context_receipt=worker.context('EvTest', web)["receipt"]["id"])
                     web.post_message.assert_called_once_with('C_ROOM', thread, 'synthetic reply')
                     if thread is not None:
                         web.has_thread.assert_not_called()
@@ -80,6 +81,7 @@ class PollRoomTests(unittest.TestCase):
                 poller = Poller(cfg, store, Path(directory) / 'poller.json')
                 poller.ensure_dm_channel = Mock(return_value='D_TEST')
                 web = Mock()
+                web.auth_test.return_value = "U_BOT"
                 web.private_room_matches.return_value = False
                 if failure == 'unavailable':
                     web.private_room_matches.side_effect = ConnectionError('synthetic API failure')

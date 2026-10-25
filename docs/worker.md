@@ -44,11 +44,11 @@ ID and scope are both `owner`; guest entries stay unprocessed pending M4.
 After composing the response, send UTF-8 text through stdin:
 
 ```sh
-python3 -m bridge.worker reply EVENT_ID < .local/reply.txt
+python3 -m bridge.worker reply EVENT_ID --context-receipt RECEIPT_ID < .local/reply.txt
 ```
 
 The command requires `SLACK_BOT_TOKEN` injected through the secure launcher.
-The model supplies only the text. The worker pins the destination to the
+The executor supplies text and the exact-claim context receipt. The worker pins the destination to the
 claimed event's channel and reply location, rechecks current config, and never
 broadcasts a reply. Text must be nonempty and no longer than 4,000 characters.
 A completed job returns its original Slack timestamp without posting again.
@@ -64,8 +64,8 @@ and `resume` packets include `queue_context.required_before_reply: true`, the
 exact `refresh_event_id` and `refresh_argv: ["context", EVENT_ID]`. These are
 mandatory runtime instructions before composing any new reply, including when
 the initial count is zero. Use the same approved launcher, config and state as
-the claim. The worker CLI does not enforce runtime adoption with a new database
-state or send gate. Retrieve the snapshot explicitly:
+the claim. The send path now requires the `receipt.id` from a successful refresh
+for this exact claim. Retrieve the snapshot explicitly:
 
 ```sh
 # With the bot credential securely injected, as for reply:
@@ -78,7 +78,10 @@ keep it in the authorized runtime context, not public logs or issue reports.
 The command requires an existing `claimed` job and rechecks current policy.
 For agent rooms it authenticates the same bot identity as the original event
 and verifies exact current private/unshared membership before returning text.
-Lookup failure or changed membership fails closed without changing jobs.
+Lookup failure or changed membership fails closed without changing jobs. Each
+attempt writes local audit metadata; `read_only` means no job consumption or
+conversation mutation, not a filesystem with no writes. A pending or failed
+new refresh invalidates the preceding successful receipt.
 
 The snapshot labels `read_only: true` and includes at most the **10 latest**
 eligible unfinished events in that same conversation, newer by exact Slack
@@ -94,8 +97,9 @@ These records are context, **not additional claimed work or new authorization**.
 Use corrections to avoid a stale response while preserving unresolved original
 work. Do not automatically skip, finish, claim or execute those later jobs.
 They remain eligible for their own normal handling. Avoid duplicate acknowledgements,
-but keep substantive progress updates; this is not a one-reply quota. The original
-reply location and existing `sending`/reconciliation protection remain unchanged.
+but keep substantive progress updates; this is not a one-reply quota. The existing `sending`/reconciliation protection remains unchanged. A newly
+appeared thread is checked at refresh and send; changed routing requires a new
+refresh before sending.
 A `sending` or `done` job cannot be refreshed with this action.
 
 This is a local snapshot, not Slack history backfill, and it can become stale
@@ -106,8 +110,29 @@ execution can make it stale again; refresh immediately before composing the
 actual reply if execution was delayed. Semantic handling of owner cancellations
 and preserving unrelated unfinished requests must be verified in the actual
 executor; context retrieval itself neither cancels nor completes a job.
-The external runtime must call this supported refresh action; an old integration
-that ignores it will still compose replies from its original packet.
+The external runtime must call this supported refresh action and pass its receipt
+ID to `reply --context-receipt`. An integration that ignores it cannot send a new
+reply through this worker. Receipts expire after 60 seconds; refresh again and
+reconsider the response if composing took longer, new eligible context arrived,
+or the claim was resumed/reconciled. A receipt is a local audit handle, not a
+credential, proof of model comprehension, or permission for new work.
+
+Immediately before committing `claimed` to `sending`, the worker checks the
+receipt's exact event, claim generation, immutable original, latest successful
+refresh attempt, age, policy, conversation routing and current eligible queue
+revision. Missing/failed/stale/mismatched refresh refuses the post and retains
+the claim. Queue append and this send transition share a lock, followed by an
+SQLite transaction. Competing workers cannot both commit a send for the same
+job or the same `(channel, ts)`, including historical aliases with distinct IDs.
+No network calls run under that queue lock. The `sending` state is committed
+before posting; a timeout remains uncertain and is never automatically retried.
+Completed jobs only return the stored timestamp.
+
+This boundary covers updated cooperating writers sharing one local state
+directory. A new Slack message can arrive after the final local check, and
+Socket outages can hide messages entirely. This is not an atomic transaction
+with Slack history, an exactly-once delivery claim, or semantic cancellation
+handling by the model. Do not bypass receipt refusal with a direct API call.
 
 ### Runtime integration checklist
 
@@ -119,9 +144,12 @@ that ignores it will still compose replies from its original packet.
 3. Treat returned messages as read-only context, not completed work or extra
    execution authority. Apply relevant corrections while preserving pending work;
    keep substantive updates and suppress only duplicate acknowledgements.
-4. Submit through the original event's pinned `reply` path. Keep existing
+4. Submit through the original event's pinned `reply --context-receipt RECEIPT_ID` path. Keep existing
    sending/reconcile handling; a refresh cannot authorize an uncertain resend.
-5. Verify runtime adoption and lifecycle separately with synthetic evidence.
+5. Independently verify that the current native conversation and intended target
+   runtime are the same deployment before any installation or live acceptance.
+   A prior SSH success, repository HEAD or peer assertion alone is insufficient.
+   Verify runtime adoption and lifecycle separately with synthetic evidence.
    Confirm the exact `current_context` event/correction/cancellation reaches the
    executor without hook-output truncation before treating the adapter as live.
    This repo does not register the adapter or prove main-chat/check/executor
@@ -313,3 +341,32 @@ uncertain delivery, and queue recovery. Live acceptance still requires the
 owner DM/private-channel message to receive a threaded Muse reply and a
 non-owner message to leave no queue record, reaction or reply. Do not mark
 M1/M2 live-complete before those checks and wake-hook installation succeed.
+
+## Rescue planning without applying or posting
+
+```sh
+python3 -m bridge.recovery --state .local/state ORIGINAL_DURABLE_EVENT_ID
+```
+
+This separate command opens existing SQLite in read-only mode, uses a shared
+existing intake lock if available, and emits metadata only. It never creates a
+claim/receipt, repairs a payload, requeues, changes state or posts. No credential
+is required. Use the original durable queue ID, which can differ from the
+Socket envelope ID; missing/ambiguous identity is a hold, not an alias guess.
+Without an existing lock, the output marks its snapshot uncoordinated and a
+quiescent updated-writer snapshot is required before further decisions.
+
+A legacy record missing room metadata is distinct from a new intake fix. New
+code does not repair an old deduplicated payload. Compare the original exact
+`(channel, ts)`, existing job/send history, and authorized latest conversation
+readback before proposing a separate recovery. `sending` is held uncertain;
+`done` requires delivery verification without resending; `claimed` keeps its
+existing executor ownership. An unclaimed record still requires eligibility
+review. If later conversation already answered the request, suppress duplicate
+acknowledgements without marking unrelated unfinished work complete. Missing
+readback or uncertain delivery is a hold. This tool has no apply mode.
+
+Any future live recovery requires independently verified native/target runtime
+identity, an explicit reviewed change, consistent private state backup and
+coordination with existing writers/executors. Do not roll back to a database
+snapshot predating sends, drop receipt state, or re-enable age-based reclaim.

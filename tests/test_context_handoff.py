@@ -36,6 +36,7 @@ audiences:
                         reply_thread_ts=None, conversation_ts='', bot_user_id='U_BOT', transport='socket'))
                 before = store.queue_path.read_bytes()
                 web = Mock()
+                web.has_thread.return_value = False
                 def correction_during_refresh():
                     # An owner cancellation arrives after claim but before the
                     # executor handoff. It must be visible, never auto-consumed.

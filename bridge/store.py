@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -49,10 +50,20 @@ class EventStore:
         """Append a record; returns False (and writes nothing) on duplicate."""
         # A separate lock file covers both persistence files. Refresh under
         # that lock: another long-lived listener/poller may have appended.
-        with (self.state_dir / "append.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with self.locked():
             self._reload_seen()
             return self._append_locked(record)
+
+    @contextmanager
+    def locked(self):
+        """Coordinate snapshots/send transitions with cooperating intake writers.
+
+        Lock order is queue first, then worker SQLite. Never hold this lock
+        across Slack API calls.
+        """
+        with (self.state_dir / "append.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
 
     def _append_locked(self, record: dict) -> bool:
         event_id = record["event_id"]

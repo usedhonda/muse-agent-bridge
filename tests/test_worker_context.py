@@ -44,6 +44,7 @@ class WorkerContextTests(unittest.TestCase):
         packet = self.worker.claim()
         guidance = packet['queue_context']
         self.assertTrue(guidance['required_before_reply'])
+        self.assertIn('--context-receipt', guidance['instruction'])
         self.assertEqual(guidance['refresh_event_id'], packet['event']['event_id'])
         self.assertEqual(guidance['refresh_argv'], ['context', 'EvExact'])
         self.assertEqual(guidance['newer_count'], 0)
@@ -77,7 +78,7 @@ class WorkerContextTests(unittest.TestCase):
         self.assertEqual(row['provenance'], 'local_durable_queue')
         self.assertEqual(row['job_state'], 'queued')
         self.assertNotIn('synthetic correction', json.dumps(packet))
-        self.worker.reply('EvOld', 'progress updated for correction; original work retained', self.web)
+        self.worker.reply('EvOld', 'progress updated for correction; original work retained', self.web, context_receipt=self.worker.context('EvOld', self.web)["receipt"]["id"])
         self.assertEqual(self.worker.claim()['event']['event_id'], 'EvCorrection')
         self.web.post_message.assert_called_once()
 
@@ -110,7 +111,7 @@ class WorkerContextTests(unittest.TestCase):
         snapshot = self.worker.context('EvOld', self.web)
         self.assertEqual([row['event_id'] for row in snapshot['events']], ['EvSame'])
         self.assertEqual(snapshot['events'][0]['thread_ts'], '90.1')
-        self.worker.reply('EvOld', 'thread progress', self.web)
+        self.worker.reply('EvOld', 'thread progress', self.web, context_receipt=self.worker.context('EvOld', self.web)["receipt"]["id"])
         self.web.post_message.assert_called_once_with('C_ROOM', '90.1', 'thread progress')
 
     def test_limits_choose_latest_context_and_label_clipped_text(self):
@@ -151,7 +152,7 @@ class WorkerContextTests(unittest.TestCase):
         self.worker.context('EvOld', self.web)
         self.web.post_message.side_effect = TimeoutError()
         with self.assertRaises(TimeoutError):
-            self.worker.reply('EvOld', 'progress', self.web)
+            self.worker.reply('EvOld', 'progress', self.web, context_receipt=self.worker.context('EvOld', self.web)["receipt"]["id"])
         before = self.states()
         with self.assertRaises(ValueError):
             self.worker.context('EvOld', self.web)

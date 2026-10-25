@@ -63,7 +63,8 @@ recovery limits and required deployment evidence.
 
 ## Upgrade and transport cutover
 
-1. Pause intake and new wake-hook claims. Inspect `bridge.worker pending` and
+1. Independently verify the current native conversation and target runtime
+   deployment match; prior SSH success alone is insufficient. Pause intake and new wake-hook claims. Inspect `bridge.worker pending` and
    finish or deliberately recover in-flight turns before changing the runtime.
 2. Preserve local edits and back up `.local/`, including config, queue, worker
    SQLite database and associated SQLite sidecar files, dedupe data, and
@@ -107,3 +108,9 @@ clear polling watermarks to fix a stuck job. Preserve incomplete queue tails for
 operator recovery. Restoring an older snapshot can replay intake or lose evidence
 of a delivered reply; compare actual Slack delivery and runtime actions before
 resuming claims. Resolve uncertain delivery before restarting normal processing.
+
+New worker replies require `--context-receipt` from the exact-claim refresh.
+Upgrade the executor call site together with the worker; old callers fail closed.
+Roll back code only after accounting for active sends and preserving the current
+worker database and audit state. Never restore an older database over delivery
+receipts or reactivate automatic age reclaim.

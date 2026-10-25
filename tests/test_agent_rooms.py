@@ -19,6 +19,7 @@ class AgentRoomTests(unittest.TestCase):
         self.cfg = BridgeConfig('test', None, [self.audience])
         self.store = EventStore(self.tmp.name)
         self.web = Mock()
+        self.web.auth_test.return_value = "U_MUSE"
         self.web.private_room_matches.return_value = True
         self.web.has_thread.return_value = False
         self.web.post_message.return_value = '300.1'
@@ -41,7 +42,7 @@ class AgentRoomTests(unittest.TestCase):
         packet = self.worker.claim()
         self.assertEqual(packet['event']['user'], 'U_PEER')
         self.assertIn('not new owner authorization', packet['conversation_policy'])
-        self.worker.reply('Ev1', 'A useful answer', self.web)
+        self.worker.reply('Ev1', 'A useful answer', self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         self.web.post_message.assert_called_once_with('C_ROOM', None, 'A useful answer')
         self.web.private_room_matches.assert_called_with(
             'C_ROOM', {'U_OWNER', 'U_PEER', 'U_SECOND', 'U_MUSE'})
@@ -57,7 +58,7 @@ class AgentRoomTests(unittest.TestCase):
     def test_existing_thread_stays_in_place(self):
         self.intake(thread_ts='90.1')
         self.worker.claim()
-        self.worker.reply('Ev1', 'In this thread', self.web)
+        self.worker.reply('Ev1', 'In this thread', self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         self.web.post_message.assert_called_once_with('C_ROOM', '90.1', 'In this thread')
         self.web.has_thread.assert_not_called()
 
@@ -65,7 +66,7 @@ class AgentRoomTests(unittest.TestCase):
         self.intake()
         self.worker.claim()
         self.web.has_thread.return_value = True
-        self.worker.reply('Ev1', 'Thread appeared', self.web)
+        self.worker.reply('Ev1', 'Thread appeared', self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         self.web.post_message.assert_called_once_with('C_ROOM', '100.1', 'Thread appeared')
 
     def test_unknown_self_other_room_edits_and_agent_dms_rejected(self):
@@ -98,7 +99,7 @@ class AgentRoomTests(unittest.TestCase):
         self.assertEqual(self.worker.claim()['event']['event_id'], 'Ev1')
         self.assertEqual(self.worker.claim()['event']['event_id'], 'Ev3')
         self.assertIsNone(self.worker.claim())
-        self.worker.reply('Ev1', 'first', self.web)
+        self.worker.reply('Ev1', 'first', self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         packet = self.worker.claim()
         self.assertEqual(packet['event']['event_id'], 'Ev2')
         self.assertEqual(packet['history'], [{'user': 'Muse, what do you think?',

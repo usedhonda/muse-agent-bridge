@@ -24,12 +24,13 @@ class RecoveryBoundaryTests(unittest.TestCase):
                                 True, agent_channels={'C_ROOM': {'U_PEER'}})])
             worker = Worker(cfg, store)
             web = Mock()
+            web.auth_test.return_value = "U_BOT"
             web.private_room_matches.return_value = True
             web.post_message.side_effect = TimeoutError()
             try:
                 self.assertEqual(worker.claim()['event']['event_id'], 'EvCurrent')
                 with self.assertRaises(TimeoutError):
-                    worker.reply('EvCurrent', 'synthetic progress', web)
+                    worker.reply('EvCurrent', 'synthetic progress', web, context_receipt=worker.context('EvCurrent', web)["receipt"]["id"])
                 # Upgrading code does not retroactively repair an older poll
                 # record: dedupe still protects its message identity.
                 socket_copy = dict(current, event_id='EvSocketLegacy', ts='100.1',
