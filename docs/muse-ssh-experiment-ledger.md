@@ -86,7 +86,7 @@ runtime再起動・VM交換は、保存範囲・未完仕事・退避方法を�
 | 実行境界 | 実行主体、UID mapping、対象PIDの親/cgroup、既存unitの状態を限定取得する | runtime内rootやsystemdの存在からhost管理権限・新規serviceの認証可否を推測しない |
 | 接続の不安定性 | 既存forwardのrestart回数・開始/終了時刻と、そのunitの非秘密error分類を照合する | `broken pipe`は切断の症状。原因や責任層は未確定。拒否された別のlogを迂回取得しない |
 | queueとjobの差 | queueのevent IDをread-only DBの状態と対応付け、現行policyのeligibilityを純粋判定する | jobのpendingゼロやdone件数だけでは未取得・対象外queueの存在を否定できない。doneは外部task完了の証拠ではない |
-| 古いroom形式 | 現在の`agentChannels`と、queued recordのrouting metadata有無を本文抜きで照合する | 新しいpollの除外は既存recordの移行・再生ではない。metadata欠落を自動補完せず、過去の送信・実行を確認してから意図的な復旧を設計する |
+| 古いroom形式 | 現在の`agentChannels`と、queued recordのrouting metadata有無を本文抜きで照合する | 新着pollの正規化は既存recordの移行・再生ではない。metadata欠落を自動補完せず、過去の送信・実行を確認してから意図的な復旧を設計する |
 
 独立したoffline再現は [`tests/test_poll_agent_rooms.py`](../tests/test_poll_agent_rooms.py)、[`tests/test_worker_status.py`](../tests/test_worker_status.py)、[`tests/test_worker_context.py`](../tests/test_worker_context.py) を参照。これらは実VMのrestartやSocket不通中のbackfill成功を意味しない。
 

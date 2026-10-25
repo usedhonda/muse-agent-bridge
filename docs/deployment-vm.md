@@ -14,16 +14,18 @@ model or produce responses.
 | Profile | Credentials and dependencies | Intended intake |
 | --- | --- | --- |
 | Socket Mode | Secure injection of `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`; app token has `connections:write` | Listener audience gate, DMs and configured private rooms |
-| Polling | Muse VM `dynamic_credentials` helper and surrogate-aware egress, with the bot credential registered | First configured owner's DM; start with a DM-only allowlist |
+| Polling | Muse VM `dynamic_credentials` helper and surrogate-aware egress, with the bot credential registered | First owner's DM and allowlisted channels/validated rooms; start DM-only |
 
 For Socket Mode, launch `.venv/bin/python -m bridge.listener --config
 .local/config.yaml --state .local/state` with approved credential injection.
 `deploy/run-listener.sh` demonstrates the VM-specific vault helper. Polling uses
 `.venv/bin/python -m bridge.poller --config .local/config.yaml --state .local/state
 --interval 20`; it cannot run on a generic VM with only the pip dependencies.
-The poller excludes configured `agentChannels` from history reads and queue
-writes. Their exact-membership check and pinned routing metadata are implemented
-only by Socket Mode. Polling cannot provide an agent-room outage fallback.
+The poller and Socket listener share the exact room/sender admission checks
+and pinned routing normalization. Poll history is paginated and checkpointed
+only after a complete successful channel range. Separate existing-thread reply
+retrieval remains unimplemented; do not call this complete Socket-outage recovery.
+See [shared polling coverage and recovery](poll-room-normalization-plan.md).
 
 Keep `ackReaction: null` with the supplied manifest. Inject the bot credential
 into worker reply commands too; `deploy/run-worker.sh` is the corresponding

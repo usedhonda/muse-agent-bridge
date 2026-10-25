@@ -1,47 +1,85 @@
-# Room polling normalization: review plan, not a transport switch
+# Shared room polling: implementation and remaining coverage
 
-The current branch excludes configured agent rooms from polling because its
-poll records do not meet the worker's room admission/routing contract. That is a
-containment measure pending shared normalization, not a permanent requirement
-that every deployment use Socket Mode. No poller code is changed by this plan.
-Parallel poller work must first be identified by file/commit and reviewed;
-worker context receipts and metadata-only rescue planning are separate changes.
+The poller and Socket listener use `bridge.intake.normalize_event` for the same
+audience/sender gate, bot-self rejection and private/unshared exact-membership
+check. They produce the same room routing and bot identity fields, with distinct
+transport provenance. Missing-metadata owner records remain ineligible; there is
+no owner bypass in the worker. Polling does not require the Socket process to
+receive supported history messages, but neither transport starts a model executor.
 
-A minimal future alternative should reuse a single admission/normalization
-boundary for poll and Socket input, with transport provenance kept explicit:
+The source candidate reviewed was [605f8d7](https://github.com/usedhonda/muse-slack-bridge/commit/605f8d7103ab26228e1d2e1f12463ae1051959c9),
+based on `f1065b9`. Its room polling idea was integrated through the existing
+shared gate rather than taking its weaker owner-record exception or membership-only
+check. No unrelated launcher credential fallback is included. Offline evidence
+is separate from a deployed runtime or a peer's reported test count.
 
-- Resolve the authenticated bot identity from Slack, and verify private/unshared
-  room properties plus the exact configured membership before retaining bodies.
-  Validate again before contextual reads and sends. Membership/API failure must
-  not save the room body; do not trust an agent's identity assertion or widen
-  the configured room/sender set to make a payload eligible.
-- Use Slack-returned author, bot/subtype, channel and exact message/thread
-  timestamps. Preserve top-level versus existing-thread routing and bot-self
-  rejection; do not invent missing bot/room/thread metadata from conversation.
-  Share the resulting audience/scope, bot identity, reply location and conversation
-  fields with the Socket path, instead of two divergent payload schemas.
-- Fetch every available page before advancing a durable high watermark over
-  that range. Compare timestamps numerically without binary-float rounding;
-  process inclusive boundary overlap through dedupe. A partial page/API failure
-  must not advance past unseen records. State update and concurrent poll starts
-  require serialization or a recoverable checkpoint protocol; append locking
-  alone does not protect independent watermark writes.
-- Establish the supported Slack thread-retrieval capability separately; root
-  history alone must not be called existing-thread recovery. Verify required API
-  access with already authorized credentials/scopes before promising coverage.
-  Keep a bounded, documented backfill window and report gaps rather than silently
-  marking history caught up.
-- Retain the original durable ID for an already accepted `(channel, ts)`;
-  incoming envelope IDs remain provenance, not permission to create another job.
-  Both transport arrival orders, same-transport retries, concurrent processes,
-  page boundaries and crash-before-checkpoint must yield one accepted identity.
-  Legacy incomplete rows require a separately reviewed rescue plan; normalizing
-  new intake alone cannot repair an existing dedupe shadow.
+## Admission and credential adapter
 
-Offline acceptance needs both arrival orders for root and existing-thread
-messages, rejected membership/API failures with no body retention, author/bot
-validation, full/partial pagination, exact timestamp boundaries, watermark crash
-recovery and concurrent starts. Reply acceptance must still require the current
-worker context receipt, preserve originals, and hold uncertain sends. None of
-this plan switches live intake, starts a daemon, requests new credentials/scopes,
-repairs existing queues or establishes native/target runtime identity.
+`PollWebClient` reuses the existing `SlackWebClient.auth_test` and
+`private_room_matches` implementations. The runtime-specific surrogate adapter
+remains the only polling credential route. GET and POST both lazily import the
+existing helper; importing the module, offline tests and `--help` do not load
+actual credentials. No token file fallback or new credential registration is added.
+
+Bot identity is authenticated each pass. Each eligible room record rechecks
+private/unshared properties and the exact owner + configured agents + bot
+membership before saving its body. API failure stops the channel before its
+checkpoint advances. A definite room mismatch drops the body, without expanding
+membership. Normal channels follow the same mention policy as the listener;
+configured rooms accept natural authorized messages without a mention. Sender,
+bot/subtype and timestamps come from Slack history, not agent assertions.
+
+A root that names itself as `thread_ts` remains top-level unless it has replies;
+a true existing-thread message keeps its exact thread destination. This shared
+normalization is tested for both transports. **History roots alone do not supply
+all thread replies.** Separate `conversations.replies` intake/backfill is not
+implemented or live verified here. Do not promise complete thread recovery.
+
+## Pagination and checkpoints
+
+History requests include the stored exact timestamp boundary. The last completed
+boundary is skipped, not reinterpreted as a legacy rescue. Later messages are
+ordered with Decimal, without float rounding or lexical timestamp comparison.
+All pages for a channel must complete before any of that channel's records are
+queued or its watermark advances. Repeated page boundaries use stable
+`slack:CHANNEL:TS` IDs; overlap with Socket uses existing `(channel, ts)` dedupe
+and preserves the first durable ID. All cooperating writers must share one host
+and state directory. Different state copies/hosts are not coordinated.
+
+A cursor loop, missing cursor with `has_more`, invalid timestamp, API failure or
+100-page bound stops that channel with its old checkpoint intact. The bounded
+range stays in memory; rejected bodies are not written to state/logs. A repeated
+100-page stop needs an operator-reviewed bounded backfill plan, not a watermark
+jump or deletion. A failed append/checkpoint can leave durable queued records;
+retrying from the old watermark deduplicates them rather than creating new work.
+
+A dedicated poller checkpoint lock serializes passes and reloads saved state
+inside that lock. It is separate from the queue append lock, so polling HTTP does
+not block Socket appends. Checkpoints use a flushed same-directory temporary
+file and atomic replacement. Stop older writers before adopting; they do not
+honor this protocol. Preserve the checkpoint file and its lock with queue state;
+do not delete either lock while processes are running.
+
+## Acceptance and cutover limits
+
+Offline cases cover poll-first/Socket-first × owner/agent × root/thread, exact
+routing and one accepted identity/claim/send, room API/membership failures with
+no body retention, public/shared/archived/group-DM rejection, bot/author gates,
+member changes within a pass, complete/failed pages, cursor faults, exact numeric
+boundaries, interrupted append/checkpoint and concurrent poller instances.
+The reply path still requires a fresh exact-claim context receipt and preserves
+uncertain sends. GET/POST tests use substituted helpers and HTTP mocks only.
+
+No live transport was switched and no old payload was repaired/replayed. Preserve
+existing watermarks for new incoming processing. An absent/zero watermark can
+ingest history; establish a reviewed cutover boundary before starting rather
+than resetting state. Existing legacy rows still shadow redelivery of the same
+message identity; use the separate metadata-only rescue planner and latest
+conversation/delivery readback to design any deliberate recovery. A new intake
+fix is not proof those older requests were answered or completed.
+
+Before any installation, independently match the current native conversation
+and intended target runtime; prior SSH success or matching HEAD is insufficient.
+Lifecycle, credential eligibility, API coverage and actual executor adoption
+remain live acceptance work. This patch performs no service, credential, key,
+permission, network, queue-apply or deployment operation.

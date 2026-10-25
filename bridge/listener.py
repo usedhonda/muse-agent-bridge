@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError
 
-from .audience import resolve_event
+from .intake import normalize_event
 from .config import BridgeConfig, load_config
 from .store import EventStore
 
@@ -61,37 +61,12 @@ class Listener:
         if envelope_type == "events_api":
             payload = envelope["payload"]
             event = payload.get("event", {})
-            decision = resolve_event(self.cfg, event, self.bot_user_id)
-            if not decision.accepted:
+            record, reason = normalize_event(self.cfg, event, payload.get("event_id"),
+                                             "socket", self.web, self.bot_user_id)
+            if record is None:
                 send_ack(envelope["envelope_id"])
-                self._diagnose("dropped", decision.reason, payload, event)
-                return  # silent drop: no queue entry, no reaction, no body kept
-            agents = decision.audience.agent_channels.get(event.get("channel"))
-            if agents and (self.bot_user_id in agents or not self.web.private_room_matches(
-                event["channel"], decision.audience.user_ids | agents | {self.bot_user_id}
-            )):
-                send_ack(envelope["envelope_id"])
-                self._diagnose("dropped", "private-room-mismatch", payload, event)
+                self._diagnose("dropped", reason, payload, event)
                 return
-            record = {
-                "event_id": payload.get("event_id"),
-                "transport": "socket",
-                "audience_id": decision.audience.id,
-                "scope": decision.audience.scope,
-                "channel": event.get("channel"),
-                "user": event.get("user"),
-                "text": event.get("text", ""),
-                "ts": event.get("ts"),
-                "thread_ts": event.get("thread_ts") or event.get("ts"),
-                "received_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if agents:
-                # Keep an existing thread; ordinary room messages stay in the room.
-                thread = event.get("thread_ts")
-                if not thread and event.get("reply_count", 0):
-                    thread = event.get("ts")
-                record.update(reply_thread_ts=thread, conversation_ts=thread or "",
-                              bot_user_id=self.bot_user_id)
             appended = self.store.append(record)
             # Duplicate IDs are already durable; ACK them too. Exceptions above
             # must not ACK an event whose verification or persistence failed.

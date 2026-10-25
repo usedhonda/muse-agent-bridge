@@ -45,13 +45,13 @@ Choose one intake profile:
 
 - **Socket Mode:** after injecting both tokens, run
   `.venv/bin/python -m bridge.listener --config .local/config.yaml --state .local/state`.
-  This is the profile for configured private agent rooms and membership checks.
+  Configured private agent rooms use the shared room admission checks.
 - **VM polling:** requires Muse's `dynamic_credentials` helper and surrogate-aware
   egress; pip installation alone is insufficient. Start with one owner and DMs
   only, then run `.venv/bin/python -m bridge.poller --interval 20`.
-  The poller excludes configured `agentChannels` entirely because it does not
-  implement their membership gate or routing metadata. These rooms require Socket
-  Mode; polling is not their fallback during a Socket outage.
+  Configured `agentChannels` use the same private/unshared membership, sender
+  and routing normalization as Socket intake. History pagination is supported;
+  fetching existing thread replies separately is not implemented or verified.
   A fresh watermark can ingest existing owner messages, so inspect the intended
   DM before starting. See [VM deployment](docs/deployment-vm.md) for launcher
   dependencies and transport cutover precautions.
@@ -136,5 +136,5 @@ New replies require a successful exact-claim context receipt, valid for 60 secon
 Pass `receipt.id` from `context EVENT_ID`; send refusal preserves the job.
 See [the worker contract](docs/worker.md#refresh-context-before-replying) for freshness, audit writes and no-retry boundaries.
 
-Room polling normalization remains a [review plan](docs/poll-room-normalization-plan.md);
-the current containment exclusion is not a claim that Socket Mode is permanently required.
+See [shared room polling and limits](docs/poll-room-normalization-plan.md) for
+page/checkpoint recovery, cutover boundaries and unimplemented thread backfill.

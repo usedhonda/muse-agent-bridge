@@ -127,9 +127,10 @@ Until a supported lifecycle owner exists, describe intake as manual-start and
 recovery as manual. Preserve `.local/` and inspect unfinished work before using
 the existing secure launcher for an authorized manual recovery. Stop older
 intake writers during an upgrade; do not reset durable state. A polling-only
-profile can cover its supported owner-DM intake, but configured `agentChannels`
-are excluded: it cannot establish room or room-thread recovery while Socket
-Mode is unavailable. No platform configuration, service registration or restart
+profile can cover owner DMs and eligible configured room messages returned by
+history, using the shared room gate. This does not establish existing-thread
+reply recovery: separate thread retrieval and live lifecycle acceptance remain
+unverified. No platform configuration, service registration or restart
 is performed by following the repository's offline tests.
 
 ## Evidence for authorized live acceptance
