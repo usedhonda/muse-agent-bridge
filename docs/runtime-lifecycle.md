@@ -79,6 +79,15 @@ Never print returned values, raw exceptions or environment dumps for diagnosis.
    Creating a separate conversation does not by itself preserve context or
    establish an independent execution lifetime/capacity.
 
+For hooks that turn stdout JSON into executor input, use the bounded
+`deploy/run-wake.sh` adapter (or `next --with-context` with secure injection).
+It calls current-context retrieval before emitting the packet. On refresh
+failure it preserves the claim and emits no packet; a hook must preserve that
+error rather than replacing it with null or an old packet. Model-side prose
+alone is not evidence that this retrieval ran. This adapter does not start the
+model, create a conversation or establish an independent process lifetime.
+A queue/dispatch delay after handoff requires another pre-reply refresh.
+
 The bridge has no generic runtime submission API, so these are obligations for
 the target runtime's adapter, not commands already implemented by this repo.
 A claim proves a packet was handed out; it does not prove executor acceptance

@@ -92,10 +92,13 @@ for an existing listener; preserve `.local/` and reconcile unfinished work first
 Register a runtime hook to call the worker no faster than every five seconds:
 
 ```sh
-sh deploy/run-worker.sh next
+sh deploy/run-wake.sh
 ```
 
-Only a non-null packet should start a Muse turn. Preserve its `event_id`.
+Only a successful non-null packet should start a Muse turn. The adapter invokes
+`context` and includes `current_context` before emitting it; refresh failure
+keeps the original claim and produces no packet. Do not collapse that error
+to JSON null or pass an old packet as a fallback. Preserve its `event_id`.
 Pass the composed response through stdin to `run-worker.sh reply EVENT_ID`,
 or finish a no-reply turn with `run-worker.sh skip EVENT_ID`. See
 `worker.md` for the full contract and delivery recovery.

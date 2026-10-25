@@ -90,6 +90,12 @@ runtime再起動・VM交換は、保存範囲・未完仕事・退避方法を�
 
 独立したoffline再現は [`tests/test_poll_agent_rooms.py`](../tests/test_poll_agent_rooms.py)、[`tests/test_worker_status.py`](../tests/test_worker_status.py)、[`tests/test_worker_context.py`](../tests/test_worker_context.py) を参照。これらは実VMのrestartやSocket不通中のbackfill成功を意味しない。
 
+## Hookからexecutorへの最小契約
+
+stdoutのJSONをmodel入力へ渡すhookでは、packetにrefreshの説明があることと、実際にrefreshが呼ばれたことを分ける。`deploy/run-wake.sh` は既存worker launcherで `next --with-context` を呼び、同じeventへの検証済みcontext取得を実行してからpacketを出す。訂正・取り消しが取得に含まれたこと、元claimと後続recordが残ること、失敗時に古いpacketやnullへ置き換えないことをsynthetic試験で検証する。
+
+この契約はhandoff時点のsnapshotであり、model実行までの待ち時間・実際の判断・Socket不通中のbackfill成功を証明しない。対象外record数を未回答依頼数に読み替えず、依頼・訂正・取消・no-replyを実文脈で区別する。単一の古いwake packetだけでは返答反復の根因を確定しない。
+
 ## 記録の保存先
 
 公開資料とruntime一般契約は [`runtime-lifecycle.md`](runtime-lifecycle.md)、対象固有の観測とsanitized evidenceはgitignoredなローカル領域に保存する。公開PRへの転記前に、接続情報、人物・会話・内部運用情報が残っていないことを確認する。peer報告をobservedへ自動昇格せず、稼働状態や原因は検証時刻・対象sourceに限定する。

@@ -330,7 +330,9 @@ def main():
     parser.add_argument("--config", default=".local/config.yaml")
     parser.add_argument("--state", default=".local/state")
     sub = parser.add_subparsers(dest="action", required=True)
-    sub.add_parser("next", help="claim one new owner event; JSON null if none")
+    next_command = sub.add_parser("next", help="claim one new owner event; JSON null if none")
+    next_command.add_argument("--with-context", action="store_true",
+                              help="refresh and embed bounded context before executor handoff")
     sub.add_parser("status", help="show queue counts and recovery hints; never starts a turn")
     sub.add_parser("pending", help="show unfinished job metadata without restarting turns")
     context = sub.add_parser("context", help="read bounded newer same-conversation context; no job changes")
@@ -344,6 +346,8 @@ def main():
     reply.add_argument("event_id")
     resume = sub.add_parser("resume", help="recover a claimed turn; never creates a new job")
     resume.add_argument("event_id")
+    resume.add_argument("--with-context", action="store_true",
+                        help="refresh and embed bounded context before continuation")
     reconcile = sub.add_parser("reconcile", help="operator recovery after verifying Slack delivery")
     reconcile.add_argument("event_id")
     outcome = reconcile.add_mutually_exclusive_group(required=True)
@@ -376,6 +380,20 @@ def main():
             from .webapi import SlackWebClient
             result = {"slack_ts": worker.reply(args.event_id, sys.stdin.read(),
                                               SlackWebClient(os.environ["SLACK_BOT_TOKEN"]))}
+        if getattr(args, "with_context", False) and result is not None:
+            # This is executable handoff preparation, not a prose request to
+            # an executor. The claim is already durable; failure preserves it.
+            event_id = result["event"]["event_id"]
+            try:
+                from .webapi import SlackWebClient
+                current_context = worker.context(
+                    event_id, SlackWebClient(os.environ["SLACK_BOT_TOKEN"]))
+            except Exception as error:
+                print(json.dumps({"stage": "context_refresh", "event_id": event_id,
+                                  "claim_preserved": True, "error_kind": type(error).__name__}),
+                      file=sys.stderr)
+                raise SystemExit(2) from None
+            result["current_context"] = current_context
         print(json.dumps(result, ensure_ascii=False))
     finally:
         worker.close()

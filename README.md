@@ -56,8 +56,11 @@ Choose one intake profile:
   DM before starting. See [VM deployment](docs/deployment-vm.md) for launcher
   dependencies and transport cutover precautions.
 
-Register a wake hook in your existing runtime to invoke `python -m bridge.worker
-next` no faster than every five seconds and implement the turn contract below.
+Register a wake hook in your existing runtime to invoke `sh deploy/run-wake.sh`
+on the Muse credential-adapter profile, or `python -m bridge.worker next
+--with-context` with secure bot injection, no faster than every five seconds.
+This executes bounded context refresh before handing the packet to the runtime;
+implement the turn contract below.
 The `hookPollIntervalSec` config field does not schedule a hook by itself.
 
 The offline tests require no Slack credentials and do not prove a live deployment.
@@ -71,7 +74,7 @@ turns deliberately before retrying external actions.
 ## How a turn works
 
 1. Intake accepts an eligible DM or configured channel message into a durable queue.
-2. Your runtime calls `python -m bridge.worker next`, starts a model turn only for
+2. Your runtime uses the context-refreshing wake adapter, starts a model turn only for
    a non-null packet, and retains its `event.event_id`.
 3. Your runtime supplies the reply text to `python -m bridge.worker reply EVENT_ID`
    on stdin, or completes a no-reply turn with `skip EVENT_ID`.

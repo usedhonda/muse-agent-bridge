@@ -47,8 +47,11 @@ the selected unit. The Socket Mode template invokes Python directly, so adapt
 it to use the approved launcher or supply its secure environment explicitly.
 Confirm service logs without printing credentials or conversation bodies.
 
-The external runtime must schedule `bridge.worker next` no faster than every
-five seconds, carry the event ID through its turn, and call `reply` or `skip`.
+The external runtime must schedule the context-refreshing `deploy/run-wake.sh`
+adapter (or securely injected `bridge.worker next --with-context`) no faster
+than every five seconds, carry the original event ID through its turn, and call
+`reply` or `skip`. The adapter is code for the stdout handoff; runtime registration
+and untruncated receipt of `current_context` must still be verified.
 Use [the worker contract](worker.md) for packet handling and runtime recovery.
 
 Keep short checks and long-lived intake/model execution under separate supported

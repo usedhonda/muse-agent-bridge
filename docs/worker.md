@@ -11,11 +11,31 @@ separate deployment steps and must be verified live.
 Configure the existing runtime to poll no faster than every five seconds:
 
 ```sh
-python3 -m bridge.worker next
+# Generic secure injection profile: bot credential must already be injected.
+python3 -m bridge.worker next --with-context
 ```
 
+On the supported Muse credential-adapter profile, use the executable hook
+adapter `sh deploy/run-wake.sh` instead. It invokes the existing secure worker
+launcher with `next --with-context`. Optional global `--config`/`--state` options
+can be passed to this adapter before the fixed subcommand.
+
 The result is JSON `null` when there is no new eligible event, otherwise an
-object with `event` and `history`. Start one Muse turn only for a non-null
+object with `event`, `history` and `current_context`. Before emitting that
+packet, the CLI **calls** the same validated `context EVENT_ID` operation; the
+executor receives the bounded latest corrections/cancellations already present
+in the queue, rather than only prose asking it to refresh later. This is the
+last handoff-preparation step, not a new scheduler or model executor. `resume
+EVENT_ID --with-context` prepares a deliberate continuation the same way.
+
+If refresh fails, the command exits 2, emits no packet on stdout, and reports
+only stage/event ID/error type on stderr. The original claim and all later
+records remain intact. Do not hide this failure behind `|| echo null`, start
+a model from an old packet, or automatically release/complete anything.
+
+Plain `next` remains the metadata-only legacy interface for compatibility;
+existing runtime hooks must explicitly adopt the adapter/flag. Neither the
+adapter nor documentation deploys that change into a running environment. Start one Muse turn only for a successful non-null
 result. `event.event_id` is the durable job key; pass it through the turn.
 `history` includes only completed exchanges from the same scope, audience,
 channel and conversation. A private agent room uses separate room-level history for top-level messages and separate history for each existing thread. The first release serves only the audience whose
@@ -81,6 +101,11 @@ A `sending` or `done` job cannot be refreshed with this action.
 This is a local snapshot, not Slack history backfill, and it can become stale
 again if another event arrives. It neither drains the FIFO queue nor increases
 runtime throughput, starts a missing listener, or recovers Socket outage messages.
+`current_context` is a handoff-time snapshot. A platform delay or long-running
+execution can make it stale again; refresh immediately before composing the
+actual reply if execution was delayed. Semantic handling of owner cancellations
+and preserving unrelated unfinished requests must be verified in the actual
+executor; context retrieval itself neither cancels nor completes a job.
 The external runtime must call this supported refresh action; an old integration
 that ignores it will still compose replies from its original packet.
 
@@ -97,6 +122,8 @@ that ignores it will still compose replies from its original packet.
 4. Submit through the original event's pinned `reply` path. Keep existing
    sending/reconcile handling; a refresh cannot authorize an uncertain resend.
 5. Verify runtime adoption and lifecycle separately with synthetic evidence.
+   Confirm the exact `current_context` event/correction/cancellation reaches the
+   executor without hook-output truncation before treating the adapter as live.
    This repo does not register the adapter or prove main-chat/check/executor
    lifetime, listener availability, credential eligibility or queue throughput.
 
@@ -199,7 +226,10 @@ Classify queue eligibility separately from job status before choosing recovery:
 
 `pending` lists unfinished **jobs**, not unclaimed queue records. Pending zero
 therefore does not prove the queue is drained. Ineligible records can coexist
-with completed jobs, and old records may be ineligible under today's config.
+with completed jobs. A count of ineligible records is not a count of unanswered
+requests: actual context is required to distinguish work, corrections,
+cancellations and no-reply conversation. Do not replay a count as a work list.
+Old records may be ineligible under today's config.
 Use `status` to distinguish those categories on a compatible checkout. For
 read-only diagnosis of an older deployment, use read-only database/queue
 inspection or a protected consistent offline copy; do not initialize a newer
