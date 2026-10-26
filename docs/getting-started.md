@@ -44,8 +44,7 @@ cp config.example.yaml .local/config.yaml
 ```
 
 For an upgrade, preserve the existing config and state instead of copying
-over them. YAML is the current example; the legacy JSON example is not the
-recommended deployment profile.
+over them. The example configuration is YAML.
 
 Fill in the owner user ID and allowed private-channel IDs locally. Keep
 `ackReaction: null` unless the app is deliberately granted `reactions:write`.

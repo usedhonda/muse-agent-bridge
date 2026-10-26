@@ -1,8 +1,14 @@
-# muse-slack-bridge
+# muse-agent-bridge
 
-A Slack intake and reply bridge for an existing Muse agent runtime. It filters
-messages by local audience configuration, persists accepted messages, and exposes
-a worker CLI for the runtime to claim turns and post replies.
+A platform-common intake and reply bridge for an existing Muse agent runtime,
+with adapters for Slack and Telegram. It filters messages by local audience
+configuration, persists accepted messages, and exposes a worker CLI for the
+runtime to claim turns and post replies. (This repository was formerly named
+muse-slack-bridge.)
+
+**New here?** Start with [Start here: your first bridge reply](docs/start-here.md).
+It walks from zero to a working Telegram bridge — the shortest path — and then
+points to the Slack setup.
 
 **This repository is not a turnkey model agent.** You must supply the model/runtime,
 its wake hook, and secure credential injection. Starting an intake process alone
@@ -25,7 +31,12 @@ Modeled on OpenClaw's Slack channel (`openclaw/openclaw`,
 the design contracts — manifest, scopes, token model, mention gating,
 thread sessions — carry over; the runtime does not.
 
-Status: **M1 listener and M2 worker interface are implemented and offline-tested.** An owner/private-room round trip was verified on an earlier deployment. New agent-room routing is offline-tested and has not been deployed. See [HANDOFF.md](HANDOFF.md).
+Status: the Slack package and the platform-neutral `bridge_core` (with its
+Telegram adapter) are implemented and offline-tested. The Telegram adapter runs
+live in the reference deployment (owner DM plus a private agent room); the Slack
+side serves the same deployment. Live behavior is deployment-specific — the
+offline tests are the shared contract. See [HANDOFF.md](HANDOFF.md) for the
+early history.
 
 ## Quick start
 
@@ -160,17 +171,14 @@ behavior. Review [Slack-side settings](docs/slack-recommended-settings.yaml) too
 ## Repository hygiene
 
 This public repository contains code, example configuration, and documentation.
-Keep real tokens, workspace/channel/user IDs, hosts and conversation content out
-of commits. Local configuration and state belong in `.local/` (gitignored);
-credentials belong in your approved secure connection or secret injector.
-
-This repository is public and contains only code, the app manifest, an
-example config, and docs. **No real tokens, workspace/channel IDs, owner
-IDs, hostnames, or conversation content belong here.** Local state lives in
-`.local/` (gitignored); tokens live only in Muse's secure connection.
+**No real tokens, workspace/channel IDs, owner IDs, hostnames, or conversation
+content belong here.** Local configuration and state belong in `.local/`
+(gitignored); credentials live only in your approved secure connection or
+secret injector.
 
 ## Further reading
 
+- [Start here: your first bridge reply](docs/start-here.md) — the beginner path, Telegram first
 - [Getting started and diagnosing a silent bot](docs/getting-started.md) — detailed VM profile and stage checks
 - [Review backlog](docs/review-backlog.md) — completed offline work and remaining acceptance
 
