@@ -2,8 +2,8 @@
 
 A wake turn that dies mid-claim (runtime restart, session replacement)
 leaves its job in 'claimed'; per-conversation ordering then blocks
-every later message in that conversation. Worker.claim releases claims
-older than CLAIM_TTL_SECONDS so the event can be claimed again.
+every later message in that conversation. Worker.claim preserves even old claims; operators must verify the old
+runtime stopped before deliberately resuming.
 """
 import tempfile
 import time
@@ -44,10 +44,13 @@ class ClaimTtlTests(unittest.TestCase):
         self.assertIsNotNone(self.worker.claim())
         self.assertIsNone(self.worker.claim())
 
-    def test_stale_claim_is_released_and_reclaimable(self):
+    def test_stale_claim_requires_deliberate_recovery(self):
         self.assertIsNotNone(self.worker.claim())
         self.backdate_claim(CLAIM_TTL_SECONDS + 60)
-        packet = self.worker.claim()
+        self.assertIsNone(self.worker.claim())
+        self.assertEqual(self.worker.status()["counts"]["stale_claimed"], 1)
+        packet = self.worker.resume("Ev1")
+        self.assertEqual(self.worker.status()["counts"]["stale_claimed"], 0)
         self.assertIsNotNone(packet)
         self.assertEqual(packet["event"]["event_id"], "Ev1")
 

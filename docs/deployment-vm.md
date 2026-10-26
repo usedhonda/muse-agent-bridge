@@ -1,52 +1,118 @@
-# Deployment on Muse's agent VM (owner-DM profile)
+# VM deployment profiles
 
-This is a second, standby deployment prepared on Muse's agent VM so the
-bridge does not depend on the owner's Mac being awake. The pre-existing
-Mac-runtime deployment is currently the live path for the owner's Slack
-DMs; this VM deployment takes over once its bot credential registration
-(see "Credential custody") is complete and its own round trip is verified.
+This is an operator guide, not an inventory of live deployments. Choose the
+intake, credential provider, paths and supervisor for the target host, then
+verify its own round trip. The repository does not establish that any host is
+live, standby, or ready to take over.
 
-## Shape
+Start with the [README quick start](../README.md#quick-start). The VM needs an existing agent
+runtime and a registered wake hook; supervising intake alone does not run a
+model or produce responses.
 
-- Checkout at `~/muse-slack-bridge` (this repository, `main`), virtualenv
-  in `.venv`. Local state in `.local/` (gitignored): `config.yaml`,
-  `state/` (queue, worker SQLite, poller watermark).
-- Config profile: one `owner` audience, DM only, `ackReaction: null` —
-  matching the existing Slack app (bot events `message.im` /
-  `message.groups`, DM-oriented scopes, no distribution).
+## Choose a profile
 
-## Credential custody
+| Profile | Credentials and dependencies | Intended intake |
+| --- | --- | --- |
+| Socket Mode | Secure injection of `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`; app token has `connections:write` | Listener audience gate, DMs and configured private rooms |
+| Polling | Muse VM `dynamic_credentials` helper and surrogate-aware egress, with the bot credential registered | First owner's DM and allowlisted channels/validated rooms; start DM-only |
 
-No raw Slack token exists on this VM. The bot token is registered once in
-Muse's secure connection as `custom.slack-muse-bot` (API key, bearer
-header, host `slack.com`). Local processes ask authd for an `hsurr:*`
-surrogate and put it in the `Authorization` header; the egress layer swaps
-it for the real token on requests to slack.com.
+For Socket Mode, launch `.venv/bin/python -m bridge.listener --config
+.local/config.yaml --state .local/state` with approved credential injection.
+`deploy/run-listener.sh` demonstrates the VM-specific vault helper. Polling uses
+`.venv/bin/python -m bridge.poller --config .local/config.yaml --state .local/state
+--interval 20`; it cannot run on a generic VM with only the pip dependencies.
+The poller and Socket listener share the exact room/sender admission checks
+and pinned routing normalization. Poll history is paginated and checkpointed
+only after a complete successful channel range. Separate existing-thread reply
+retrieval remains unimplemented; do not call this complete Socket-outage recovery.
+See [shared polling coverage and recovery](poll-room-normalization-plan.md).
 
-- Intake (`bridge/poller.py`) applies the surrogate per request.
-- Replies run through `deploy/run-worker.sh`, which fetches a fresh
-  surrogate and exports it as `SLACK_BOT_TOKEN` for `bridge.worker`.
+Keep `ackReaction: null` with the supplied manifest. Inject the bot credential
+into worker reply commands too; `deploy/run-worker.sh` is the corresponding
+VM-specific example. Never put credentials in config, units, logs or commits.
+Runtime-specific connection names and helper paths in the launchers must be
+provisioned or adapted locally; these files do not register credentials for you.
+Custom Connector support does not by itself establish credential eligibility
+for an independent service; consult the [verified Muse boundaries and unknowns](runtime-lifecycle.md#muse-public-architecture-and-integration-unknowns).
 
-## Intake choice
+## Supervision and paths
 
-`bridge/poller.py` polls the owner's DM channel every 20 seconds and
-appends new owner messages to the same durable queue the Socket Mode
-listener writes, in the same record format, so `bridge.worker` claims
-them identically. The Socket Mode listener remains the lower-latency
-upgrade path for a deployment where the app token can be held directly;
-on this VM custody wins. Polling a single DM channel stays far inside
-Slack's rate tiers.
+Keep the checkout, virtual environment, `.local/config.yaml`, and `.local/state/`
+consistent across intake and worker invocations. Use the virtualenv interpreter
+that has `requirements.txt` installed.
 
-## Supervision
+The units under `deploy/` are templates to inspect and adapt, not ready-made
+portable installations. The Socket Mode file is a systemd user unit; the polling
+file uses a system service layout and fixed example paths. Set the target paths,
+interpreter, credential launcher and service ownership locally before enabling
+the selected unit. The Socket Mode template invokes Python directly, so adapt
+it to use the approved launcher or supply its secure environment explicitly.
+Confirm service logs without printing credentials or conversation bodies.
 
-- `deploy/muse-slack-bridge-poller.service` (systemd user unit,
-  `Restart=always`) runs the poller.
-- A runtime wake hook polls `bridge.worker next` and starts a Muse turn
-  for each claimed event; replies go out through `deploy/run-worker.sh`.
+The external runtime must schedule the context-refreshing `deploy/run-wake.sh`
+adapter (or securely injected `bridge.worker next --with-context`) no faster
+than every five seconds, carry the original event ID through its turn, and call
+`reply` or `skip`. The adapter is code for the stdout handoff; runtime registration
+and untruncated receipt of `current_context` must still be verified.
+Use [the worker contract](worker.md) for packet handling and runtime recovery.
 
-## Upgrade rule
+Keep short checks and long-lived intake/model execution under separate supported
+lifecycle owners. The shell launchers use `exec` and do not detach from a check
+or install a keeper. If the user bus is unavailable, establish the host's approved
+lifecycle mechanism before claiming unattended recovery; see the
+[runtime lifecycle contract](runtime-lifecycle.md) for existing support, manual
+recovery limits and required deployment evidence.
 
-Preserve `.local/` across upgrades (config, queue, worker DB, poller
-watermark). Never reset the worker database to "fix" a stuck job; use
-`bridge.worker pending` / `resume` / `reconcile` as documented in
-`docs/worker.md`.
+## Upgrade and transport cutover
+
+1. Independently verify the current native conversation and target runtime
+   deployment match; prior SSH success alone is insufficient. Pause intake and new wake-hook claims. Inspect `bridge.worker pending` and
+   finish or deliberately recover in-flight turns before changing the runtime.
+2. Preserve local edits and back up `.local/`, including config, queue, worker
+   SQLite database and associated SQLite sidecar files, dedupe data, and
+   `poller.json` watermarks. Use a consistent snapshot with processes stopped.
+   Protect backups as private conversation state; keep them outside commits.
+3. Update the checkout and dependencies, reconcile local patches, and keep the
+   same local state paths. Check changed configuration and launcher requirements.
+4. Restart the chosen intake and wake hook, then verify a small authorized live
+   round trip and the unauthorized-sender rejection check.
+
+Run one intake profile per conversation. During a handover, tagged socket/poll
+records for the same `(channel, ts)` are deduplicated under an append lock when
+both processes run this version on the same host/local state directory. Stop
+older unpatched writers before upgrading; separate hosts or state directories
+are not coordinated.
+Before switching, establish the last accepted message and inspect the target
+transport's backlog/watermarks. A fresh polling watermark can ingest history.
+Plan the cutover deliberately; do not delete state to force a clean start.
+
+## Preservation and recovery
+
+An empty `next` result is not proof of a healthy runtime. Check intake and hook
+supervision, credentials, local config and pending jobs independently. A receipt
+ACK/reaction is intake evidence; a reply is delivery evidence; external task
+completion requires the runtime's own result verification.
+
+Use `.venv/bin/python -m bridge.worker status` for local metadata counts,
+incomplete queue-tail detection and recovery hints, without message bodies or
+Slack requests. It may initialize the local worker database if one is missing. `stale_claimed` is an age diagnostic, not permission to replay a
+turn; claim age does not automatically release it. Inspect unfinished job metadata
+with `.venv/bin/python -m bridge.worker pending`. Verify the old runtime has stopped
+before deliberately continuing a known claim with
+`.venv/bin/python -m bridge.worker resume EVENT_ID`; do not automatically repeat
+model turns or external actions. A job stuck in `sending` requires checking Slack for
+the attempted post before using `reconcile --sent-ts MESSAGE_TS` or
+`reconcile --confirmed-not-sent`. The latter permits a deliberate reply retry;
+it does not send by itself. See [recovery details](worker.md#recovery).
+
+Never reset the worker database, truncate queue evidence, remove dedupe data, or
+clear polling watermarks to fix a stuck job. Preserve incomplete queue tails for
+operator recovery. Restoring an older snapshot can replay intake or lose evidence
+of a delivered reply; compare actual Slack delivery and runtime actions before
+resuming claims. Resolve uncertain delivery before restarting normal processing.
+
+New worker replies require `--context-receipt` from the exact-claim refresh.
+Upgrade the executor call site together with the worker; old callers fail closed.
+Roll back code only after accounting for active sends and preserving the current
+worker database and audit state. Never restore an older database over delivery
+receipts or reactivate automatic age reclaim.

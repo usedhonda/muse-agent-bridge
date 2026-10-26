@@ -28,6 +28,8 @@ class FakeSlack:
         self.messages = []
 
     def __call__(self, method, params):
+        if method == "auth.test":
+            return {"ok": True, "user_id": "U_BOT", "bot_id": "B_SELF"}
         if method == "conversations.open":
             return {"ok": True, "channel": {"id": "D_OWNER"}}
         if method == "conversations.history":

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Run bridge.worker with the bot credential injected as a vault surrogate.
 # The egress layer swaps the hsurr:* value for the real bot token on
-# requests to slack.com; the raw token never exists on this VM.
+# authorized requests to slack.com. Real credentials are not exposed to the
+# agent/runtime cell; they are held in a separate security domain in the VM.
 set -eu
 cd "$(dirname "$0")/.."
 SURROGATE=$(.venv/bin/python -c "

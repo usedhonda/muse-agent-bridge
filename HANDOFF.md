@@ -1,5 +1,35 @@
 # Handoff notes (2026-10-24)
 
+## Repository improvement checkpoint (supersedes historical behavior below)
+
+- Claimed packets expose newer-context counts; explicit `worker context` reads
+  a bounded snapshot of later same-conversation messages after current room/bot
+  validation. It does not claim/complete jobs or change uncertain-send handling.
+  Runtime adoption is required; throughput and intake availability are unchanged.
+- Listener retries transient startup authentication failures with a limit,
+  normalizes WebSocket failures for reconnect, and supports opt-in metadata-only
+  intake diagnostics. Process supervision remains deployment-specific.
+- Long-running claims are never automatically replayed by age. The 15-minute
+  threshold is diagnostic only; verify the previous runtime stopped before
+  deliberate continuation with `resume`.
+- `worker status` distinguishes queued, blocked, ineligible, claimed/stale,
+  sending and done counts, and detects incomplete queue tails. It does not
+  contact Slack or expose message bodies; it may initialize worker state.
+- Polling excludes configured agent rooms before history reads; only Socket
+  Mode supplies their membership validation and routing metadata. An incomplete
+  poll record must not shadow the valid Socket event. Historical records still
+  require deliberate recovery, not automatic replay.
+- Queue appends lock and refresh persisted dedupe state across cooperating
+  local processes, including tagged socket/poll handovers. This requires the
+  same local state directory and updated writers; separate hosts are not coordinated.
+- README and VM guide describe setup and operator-selected profiles rather
+  than treating historical deployment receipts as current configuration.
+- Offline suite: 89 tests passed, including a real two-process handover race
+  and long-running claim regression. No runtime deployment or live acceptance
+  was performed for this checkpoint. Existing independent draft PRs remain separate.
+
+The deployment entries below are historical notes, not current host inventory.
+
 ## VM deployment checkpoint (2026-10-24, Muse)
 
 - A second deployment of this bridge was prepared on Muse's agent VM:
