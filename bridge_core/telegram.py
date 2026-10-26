@@ -24,9 +24,7 @@ Keeps the operational interface the wake hook drives:
                            as its last stdout line) executed. Prints
                            {"ok": true, "message_id": ...} on success
                            (item left in "sending" for --replied and
-                           --done), {"ok": false, "stage": "send",
-                           "returned_to_pending": true} on a definitive
-                           failure (item returned to pending),
+                           --done),
                            {"ok": false, "stage": "unknown"} when the
                            outcome is ambiguous (item stays "sending",
                            never resent), {"ok": false, "stage":
@@ -304,12 +302,16 @@ def _run_send_command(send_cmd: str, chat_id, text: str):
 
     - ``("sent", id)`` — exit 0 and a message id as the last
       non-empty stdout line.
-    - ``("failed", None)`` — nonzero exit: the send definitively
-      did not go through.
     - ``("unknown", None)`` — the runner timed out or could not be
-      started, or exited 0 without a parseable message id: the send
+      started, exited nonzero (including a signal), produced undecodable
+      output, or exited 0 without a message id: the send
       may or may not have been delivered, so the item must stay in
       "sending" for reconciliation and never be resent blindly.
+
+    The executable contract has no verifiable no-send result. An exit
+    code alone cannot prove rejection: remote acceptance may precede a
+    lost response or a local crash. Confirmed non-delivery uses the
+    separate operator --send-failed path after reconciliation.
     """
     try:
         proc = subprocess.run(
@@ -319,10 +321,10 @@ def _run_send_command(send_cmd: str, chat_id, text: str):
             text=True,
             timeout=SEND_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         return "unknown", None
     if proc.returncode != 0:
-        return "failed", None
+        return "unknown", None
     lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     if not lines:
         return "unknown", None
@@ -341,10 +343,10 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
 
     - sent → the item stays in "sending"; the caller records the
       reply with --replied and closes with --done, as usual.
-    - definitively failed → the item returns to pending (exactly
-      mark_send_failed) so it can be claimed and answered later.
     - unknown → the item stays in "sending" (send-unknown) for
       operator reconciliation; it is never resent automatically.
+      Only independently verified non-delivery permits an operator
+      to return it to pending with --send-failed.
     """
     send_cmd = os.environ.get(SEND_CMD_ENV)
     if not send_cmd:
@@ -357,11 +359,6 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
     outcome, message_id = _run_send_command(send_cmd, chat_id, text)
     if outcome == "sent":
         return {"ok": True, "message_id": message_id}
-    if outcome == "failed":
-        with store.transaction() as state:
-            _ensure_adapter_state(state)
-            returned = queue_core.mark_send_failed(state, PLATFORM, target, token)
-        return {"ok": False, "stage": "send", "returned_to_pending": returned}
     return {"ok": False, "stage": "unknown"}
 
 
