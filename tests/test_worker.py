@@ -39,7 +39,7 @@ class WorkerTests(unittest.TestCase):
             "channel": "D_TEST", "channel_type": "im", "text": "hello", "ts": "100.1"}}}, Mock())
         self.assertEqual(self.worker.claim()["event"]["text"], "hello")
         self.assertIsNone(self.worker.claim())
-        self.assertEqual(self.worker.reply("Ev1", "answer", self.web), "101.1")
+        self.assertEqual(self.worker.reply("Ev1", "answer", self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"]), "101.1")
         self.worker.close()
         self.worker = Worker(self.cfg, self.store)
         self.assertEqual(self.worker.reply("Ev1", "answer", self.web), "101.1")
@@ -57,7 +57,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.claim()["event"]["event_id"], "Ev1")
         self.assertEqual(self.worker.claim()["event"]["event_id"], "Ev2")
         self.assertIsNone(self.worker.claim())  # Ev3 waits for Ev1
-        self.worker.reply("Ev1", "first answer", self.web)
+        self.worker.reply("Ev1", "first answer", self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         packet = self.worker.claim()
         self.assertEqual(packet["event"]["event_id"], "Ev3")
         self.assertEqual(packet["history"], [{"user": "hello", "assistant": "first answer"}])
@@ -68,7 +68,7 @@ class WorkerTests(unittest.TestCase):
         try:
             self.worker.claim()
             self.assertIsNone(other.claim())
-            self.worker.reply("Ev1", "answer", self.web)
+            self.worker.reply("Ev1", "answer", self.web, context_receipt=self.worker.context("Ev1", self.web)["receipt"]["id"])
             other.reply("Ev1", "answer", self.web)
             self.web.post_message.assert_called_once()
         finally:
@@ -79,7 +79,7 @@ class WorkerTests(unittest.TestCase):
         self.worker.claim()
         self.web.post_message.side_effect = TimeoutError()
         with self.assertRaises(TimeoutError):
-            self.worker.reply("Ev1", "answer", self.web)
+            self.worker.reply("Ev1", "answer", self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         self.worker.close()
         self.worker = Worker(self.cfg, self.store)
         with self.assertRaisesRegex(ValueError, "uncertain"):
@@ -154,7 +154,7 @@ class RecoveryTests(unittest.TestCase):
         self.worker.claim()
         self.web.post_message.side_effect = TimeoutError()
         with self.assertRaises(TimeoutError):
-            self.worker.reply('Ev1', 'answer', self.web)
+            self.worker.reply('Ev1', 'answer', self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         self.worker.reconcile('Ev1', '101.1')
         self.assertEqual(self.worker.reply('Ev1', 'answer', self.web), '101.1')
         self.web.post_message.assert_called_once()
@@ -164,11 +164,11 @@ class RecoveryTests(unittest.TestCase):
         self.worker.claim()
         self.web.post_message.side_effect = TimeoutError()
         with self.assertRaises(TimeoutError):
-            self.worker.reply('Ev1', 'answer', self.web)
+            self.worker.reply('Ev1', 'answer', self.web, context_receipt=self.worker.context('Ev1', self.web)["receipt"]["id"])
         self.worker.reconcile('Ev1')
         self.assertIsNone(self.worker.claim())
         self.web.post_message.side_effect = None
-        self.assertEqual(self.worker.reply('Ev1', 'answer', self.web), '101.1')
+        self.assertEqual(self.worker.reply('Ev1', 'answer', self.web, context_receipt=self.worker.context('Ev1', self.web)['receipt']['id']), '101.1')
 
     def test_group_dm_dropped_even_for_owner(self):
         from bridge.listener import Listener
