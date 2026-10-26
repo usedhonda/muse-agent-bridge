@@ -143,10 +143,15 @@ ID and scope are both `owner`; guest access remains gated on the design's M4 wor
 Runtime behavior must also enforce the context and authorization policies described
 in [the design](docs/design.md) and the worker's conversation policy.
 
-The manifest includes read-only user scopes for a broader observation profile,
-but this bridge uses the bot token and does not implement that observation feature.
-Slack app visibility and enabled scopes do not prove access restrictions or runtime
-behavior. Review [Slack-side settings](docs/slack-recommended-settings.yaml) too.
+The default manifest deliberately requests **bot scopes only**. The bridge does
+not implement workspace-wide user observation, so there is no reason for a new
+installation to grant a user token or the broad user read scopes of an unrelated
+profile. If upgrading an already-installed Slack app, **removing scopes from a
+manifest does not revoke existing token grants**: review the installation and
+re-authorize or revoke the old user token as appropriate. Do not treat a source
+change as evidence that existing permissions were reduced. Slack app visibility
+and enabled scopes do not prove runtime access restrictions. Review
+[Slack-side settings](docs/slack-recommended-settings.yaml) too.
 
 ## Policy
 
