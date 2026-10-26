@@ -86,12 +86,16 @@ EXPIRED_REASON = "expired"
 #: Intake classifications stored on the queue record as
 #: ``item_class``. Only CLASS_CONVERSATION ("ordinary conversation")
 #: is eligible for pending expiry; CLASS_REQUEST marks work that
-#: must be preserved — messages addressed to the agent, commands,
-#: and anything from the owner. A record with no classification
-#: (legacy state, or an adapter that does not classify) is treated
-#: as protected, never as conversation: chat type is not request
-#: classification, and when the class is unclear, not dropping the
-#: item is the safe side.
+#: must be preserved — messages addressed to anyone, commands,
+#: replies and other follow-ups, questions and asks, corrections
+#: and cancellations, and anything from the owner. Classification
+#: itself is the adapter's job (see the Telegram adapter's
+#: ``classify_message`` for the protection signals it checks);
+#: the queue only consumes the result. A record with no
+#: classification (legacy state, or an adapter that does not
+#: classify) is treated as protected, never as conversation:
+#: chat type is not request classification, and when the class
+#: is unclear, not dropping the item is the safe side.
 CLASS_CONVERSATION = "conversation"
 CLASS_REQUEST = "request"
 

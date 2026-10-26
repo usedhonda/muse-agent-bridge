@@ -55,6 +55,9 @@ class TelegramSendValidationTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True, "message_id": "777"})
         sender.assert_called_once_with("/fake/sender", 123456789, "approved reply")
         self.assertEqual(self.item()["status"], "sending")
+        # A send inside the age guard is no override: nothing is
+        # recorded on the item.
+        self.assertNotIn("stale_override", self.item())
 
     def test_malformed_queued_chat_refuses_even_if_argument_matches(self):
         with self.store.transaction() as state:
@@ -142,6 +145,96 @@ class TelegramSendValidationTests(unittest.TestCase):
         item = self.item()
         self.assertEqual(item["status"], "claimed")
         self.assertNotIn("done_reason", item)
+
+    def test_stale_override_sends_and_records_the_override(self):
+        """Reassessment path: after a "stale" refusal the operator
+        may deliberately send with the override. The send proceeds
+        under the full fence (sender invoked once, item moves to
+        "sending") and the item records stale_override for audit.
+        Without the override the same item stays refused and
+        records nothing."""
+        with self.store.transaction() as state:
+            queue_core.find_item(state, "telegram", 101)["received_at"] -= 7200
+        result, sender = self.fenced("123456789")
+        self.assertEqual(result, {"ok": False, "stage": "stale"})
+        sender.assert_not_called()
+        self.assertEqual(self.item()["status"], "claimed")
+        self.assertNotIn("stale_override", self.item())
+        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
+            with mock.patch.object(
+                telegram, "_run_send_command", return_value=("sent", "888")
+            ) as override_sender:
+                result = telegram.send_fenced(
+                    self.store, 101, self.token, "123456789",
+                    "reviewed reply", allow_stale=True,
+                )
+        self.assertEqual(result, {"ok": True, "message_id": "888"})
+        override_sender.assert_called_once()
+        item = self.item()
+        self.assertEqual(item["status"], "sending")
+        self.assertIs(item["stale_override"], True)
+
+    def test_stale_override_with_wrong_token_is_still_refused(self):
+        """The override skips ONLY the age refusal: a caller that
+        does not own the claim gets the plain fence refusal, the
+        sender is never invoked, and no override is recorded."""
+        with self.store.transaction() as state:
+            queue_core.find_item(state, "telegram", 101)["received_at"] -= 7200
+        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
+            with mock.patch.object(telegram, "_run_send_command") as sender:
+                result = telegram.send_fenced(
+                    self.store, 101, "bogus-token", "123456789",
+                    "late reply", allow_stale=True,
+                )
+        self.assertEqual(result, {"ok": False, "stage": "fence"})
+        sender.assert_not_called()
+        item = self.item()
+        self.assertEqual(item["status"], "claimed")
+        self.assertIsNone(item["sending_at"])
+        self.assertNotIn("stale_override", item)
+
+    def test_cli_allow_stale_sends_and_records_the_override(self):
+        """The CLI form: --send-fenced ... --allow-stale drives the
+        same reassessment path; an unknown trailing flag is a
+        usage error and sends nothing."""
+        with self.store.transaction() as state:
+            queue_core.find_item(state, "telegram", 101)["received_at"] -= 7200
+        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
+            with mock.patch.object(
+                telegram, "_run_send_command", return_value=("sent", "777")
+            ) as sender:
+                out = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO("reviewed reply")):
+                    with redirect_stdout(out):
+                        rc = telegram.main(
+                            ["--send-fenced", "101", self.token,
+                             "123456789", "--allow-stale"],
+                            path=self.path,
+                        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            json.loads(out.getvalue()), {"ok": True, "message_id": "777"}
+        )
+        sender.assert_called_once()
+        item = self.item()
+        self.assertEqual(item["status"], "sending")
+        self.assertIs(item["stale_override"], True)
+
+    def test_cli_send_fenced_rejects_unknown_trailing_flag(self):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
+            with mock.patch.object(telegram, "_run_send_command") as sender:
+                with mock.patch("sys.stdin", io.StringIO("reply")):
+                    with redirect_stdout(out):
+                        rc = telegram.main(
+                            ["--send-fenced", "101", self.token,
+                             "123456789", "--bogus"],
+                            path=self.path,
+                        )
+        self.assertEqual(rc, 2)
+        self.assertFalse(json.loads(out.getvalue())["ok"])
+        sender.assert_not_called()
+        self.assertEqual(self.item()["status"], "claimed")
 
     def test_non_finite_max_reply_age_is_refused_before_any_mutation(self):
         """Finding 5 at the fence: a NaN or infinite maximum reply

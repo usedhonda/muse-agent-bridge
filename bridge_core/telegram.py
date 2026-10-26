@@ -12,7 +12,7 @@ Keeps the operational interface the wake hook drives:
                            Refused once a reply has been recorded.
                            (Operator/manual path; the fenced send
                            below is the normal turn path.)
-  --send-fenced ID TOKEN CHAT_ID
+  --send-fenced ID TOKEN CHAT_ID [--allow-stale]
                            fenced send of one queue reply: the reply
                            text is read from stdin. In one transaction
                            the item is verified (claimed, token matches,
@@ -41,6 +41,17 @@ Keeps the operational interface the wake hook drives:
                            fence never closes claimed work. A
                            destination other than the chat recorded
                            at intake is refused without sending.
+                           --allow-stale is the operator-only
+                           reassessment override: after the operator
+                           has re-read the item and the current room
+                           state, it lets THIS send proceed past the
+                           age guard, under the full fence (valid
+                           claim token and every other check still
+                           required), and records the override on
+                           the item ("stale_override": true). The
+                           wake flow never passes it; turns must let
+                           stale refusals stand and leave the item
+                           for the operator.
   --done ID [TOKEN] [REASON] [EVIDENCE]
                            mark a claimed or sending item done; the
                            optional REASON (one short word, e.g.
@@ -93,6 +104,14 @@ and the fence's stale guard are tuned with
 expire) and ``$TELEGRAM_BRIDGE_MAX_REPLY_AGE`` (default 1800);
 a negative value disables the limit it tunes.
 
+At intake every message is classified (see ``classify_message``):
+only positively ordinary conversation — a group message carrying
+no protection signal (not from the owner, not a command, not a
+reply, no @mention, no question/request or correction/cancellation
+marker) — can ever expire; everything ambiguous is stored as a
+protected "request" instead. The marker lists live in
+``QUESTION_REQUEST_MARKERS`` and ``CORRECTION_MARKERS``.
+
 The wake payload carries every claimed item under ``"items"`` plus the
 batch ``claim_token``; for compatibility the first item's fields are
 also present at the top level, exactly as the single-item payload did.
@@ -102,6 +121,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -153,6 +173,45 @@ DEFAULT_MAX_REPLY_AGE = 1800.0
 BOT_USERNAME_ENV = "TELEGRAM_BRIDGE_BOT_USERNAME"
 DEFAULT_BOT_USERNAME = "usedhonda_muse_bot"
 
+#: An "@username" mention anywhere in the text. ANY mention — of
+#: this bot, of another agent, of the owner — is a protection
+#: signal for the intake classifier: a message that addresses
+#: someone is work for a specific reader, not room chatter. The
+#: pattern also matches the local part of an address-like string;
+#: over-protecting is the safe direction here.
+MENTION_RE = re.compile(r"@[A-Za-z0-9_]{3,}")
+
+#: Question / request markers for the intake classifier. A text
+#: carrying any of these is protected ("request" class): a
+#: question or an ask must never be swept as chatter, even when it
+#: mentions nobody. The list is deliberately small and lives ONLY
+#: here; extend it in this one place.
+QUESTION_REQUEST_MARKERS = (
+    "?",
+    "？",
+    "ください",
+    "お願い",
+    "してほしい",
+    "教えて",
+)
+
+#: Correction / cancellation markers for the intake classifier. A
+#: text carrying any of these is protected ("request" class): a
+#: correction or cancellation changes earlier work, so expiring it
+#: would silently drop the change. Same rule as above: small, and
+#: kept in this single list.
+CORRECTION_MARKERS = (
+    "やめる",
+    "やめて",
+    "中止",
+    "取消",
+    "キャンセル",
+    "訂正",
+    "間違",
+    "取り消し",
+    "やっぱりなし",
+)
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -192,25 +251,62 @@ def _bot_username() -> str:
     return raw.strip().lstrip("@").lower()
 
 
-def classify_message(text: str, *, sender_is_owner: bool, bot_username: str) -> str:
+def classify_message(
+    text: str,
+    *,
+    sender_is_owner: bool,
+    bot_username: str = "",
+    is_reply: bool = False,
+) -> str:
     """Classify one incoming message at intake.
 
-    "request" — work that must be preserved — when the message is
-    addressed to the bot: the sender is the owner, the text is a
-    bot command (starts with "/"), or it mentions the bot's
-    username. Everything else is "conversation" (ordinary room
-    talk, the only class the pending-expiry sweep may close).
+    Expiry may only ever close positively ordinary conversation,
+    so this function answers a different question: is there any
+    signal that the message is work which must be preserved? Any
+    ONE protection signal makes it "request" (never expiry-
+    eligible):
+
+    - the sender is the owner;
+    - the text is a bot command (starts with "/");
+    - the message is a reply (``is_reply``: it carries a
+      reply_to reference) — a reply is a follow-up to earlier
+      work or is directed at a specific earlier message,
+      whoever sent it;
+    - the text mentions ANY @username (this bot, another agent,
+      the owner — see MENTION_RE): addressed messages are work
+      for their addressee;
+    - the text carries a question/request marker
+      (QUESTION_REQUEST_MARKERS);
+    - the text carries a correction/cancellation marker
+      (CORRECTION_MARKERS): corrections and cancellations modify
+      earlier work and must never be dropped silently.
+
+    Only a message with NONE of these signals is "conversation"
+    (ordinary room talk, the only class the pending-expiry sweep
+    may close). Ambiguity defaults to protected: absence of the
+    old markers (slash command, this bot's literal username) does
+    NOT establish ordinary conversation — a natural-language
+    correction, an unmentioned follow-up, or a reply to a bot can
+    look plain and still be work.
 
     The sender being a bot is NOT an input: a bot's post is a
-    request when it addresses this bot and conversation when it
-    does not, exactly like a human's post. Classification is about
-    evidence of being addressed, never about who sent it.
+    request when it carries a protection signal and conversation
+    when it does not, exactly like a human's post. Classification
+    is about the message's signals, never about who sent it.
     """
     if sender_is_owner:
         return queue_core.CLASS_REQUEST
     if text.lstrip().startswith("/"):
         return queue_core.CLASS_REQUEST
+    if is_reply:
+        return queue_core.CLASS_REQUEST
+    if MENTION_RE.search(text):
+        return queue_core.CLASS_REQUEST
     if bot_username and ("@" + bot_username) in text.lower():
+        return queue_core.CLASS_REQUEST
+    if any(marker in text for marker in QUESTION_REQUEST_MARKERS):
+        return queue_core.CLASS_REQUEST
+    if any(marker in text for marker in CORRECTION_MARKERS):
         return queue_core.CLASS_REQUEST
     return queue_core.CLASS_CONVERSATION
 
@@ -316,6 +412,12 @@ def ingest(state: dict, result: dict) -> None:
             text,
             sender_is_owner=sender_id == state["owner_id"],
             bot_username=_bot_username(),
+            # A reply is a follow-up to earlier work: protected,
+            # whoever sent it (see classify_message).
+            is_reply=bool(
+                message.get("reply_to_message")
+                or message.get("reply_to_message_id")
+            ),
         )
 
         if chat_type == "private":
@@ -498,6 +600,7 @@ def send_fenced(
     *,
     max_reply_age: float | None = DEFAULT_MAX_REPLY_AGE,
     now: float | None = None,
+    allow_stale: bool = False,
 ) -> dict:
     """Send one queue reply under the send fence.
 
@@ -525,6 +628,22 @@ def send_fenced(
       up by a fresh claim, an operator close, or a later send
       decision. A caller that does not own the claim gets the plain
       fence refusal instead, stale or not.
+
+    ``allow_stale`` is the operator-only reassessment override
+    (the CLI's --allow-stale): the documented path after a "stale"
+    refusal. ``received_at`` never changes, so re-claiming alone
+    can never make an old item pass the age guard; the operator
+    instead re-reads the item and the current room state and then
+    either closes the item (--done with a reason) or deliberately
+    sends with the override. The override skips ONLY the age
+    refusal: the valid claim token, the destination binding and
+    every other fence check still apply, and a wrong-token caller
+    is refused exactly as without it. When the override is what
+    lets the send proceed, the item records ``stale_override``:
+    True in the same transaction, so the audit trail shows the
+    send was a deliberate operator decision. The wake flow never
+    sets it — woken turns have no authority to overrule the age
+    guard.
     """
     # Refuse invalid text before reserving the send. Telegram sendMessage
     # accepts 1-4096 characters, and a rejected empty/oversized reply must
@@ -551,7 +670,12 @@ def send_fenced(
         queued_chat_id = item.get("chat_id") if item is not None else None
         if type(queued_chat_id) is not int or str(queued_chat_id) != str(chat_id):
             return {"ok": False, "stage": "fence"}
-        if (
+        # The stale verdict belongs to the claim's owner alone: it
+        # requires the item claimed, the token matching, and no
+        # reply recorded — the same ownership the fence itself
+        # checks. A caller that does not own the claim falls
+        # through to mark_sending and gets the plain fence refusal.
+        stale_owned = (
             max_reply_age is not None
             and item is not None
             and item["status"] == queue_core.CLAIMED
@@ -560,12 +684,19 @@ def send_fenced(
             and item["replied_at"] is None
             and (time.time() if now is None else now) - item["received_at"]
             > max_reply_age
-        ):
+        )
+        if stale_owned and not allow_stale:
             # Stale: refuse the send, preserve the work. No state
             # changes in this transaction — the item stays claimed
             # under the caller's own token for reassessment.
             return {"ok": False, "stage": "stale"}
         fenced = queue_core.mark_sending(state, PLATFORM, target, token)
+        if fenced and stale_owned:
+            # The operator override (allow_stale) is what let this
+            # send proceed past the age guard. Record it on the
+            # item in the same transaction, so the audit trail
+            # survives alongside the send record.
+            item["stale_override"] = True
     if not fenced:
         return {"ok": False, "stage": "fence"}
     # Never trust the caller's destination, even after comparison. Only
@@ -619,7 +750,21 @@ def main(argv=None, *, fetch=fetch_updates, path: Path | None = None) -> int:
         print(json.dumps({"ok": ok}))
         return 0
 
-    if args[:1] == ["--send-fenced"] and len(args) == 4:
+    if args[:1] == ["--send-fenced"] and len(args) in (4, 5):
+        allow_stale = False
+        if len(args) == 5:
+            if args[4] != "--allow-stale":
+                print(json.dumps({
+                    "ok": False,
+                    "error": "usage: --send-fenced UPDATE_ID CLAIM_TOKEN "
+                             "CHAT_ID [--allow-stale]",
+                }))
+                return 2
+            # Operator-only reassessment override (see send_fenced).
+            # The wake flow never passes this flag: a woken turn
+            # that hits a stale refusal leaves the item claimed
+            # for the operator instead of overruling the guard.
+            allow_stale = True
         result = send_fenced(
             store,
             int(args[1]),
@@ -627,6 +772,7 @@ def main(argv=None, *, fetch=fetch_updates, path: Path | None = None) -> int:
             args[3],
             sys.stdin.read(),
             max_reply_age=_max_reply_age(),
+            allow_stale=allow_stale,
         )
         print(json.dumps(result))
         return 0

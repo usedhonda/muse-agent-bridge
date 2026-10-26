@@ -25,18 +25,21 @@ OWNER = 111
 GROUP = -777
 
 
-def msg_update(uid, chat_id, chat_type, sender_id, text, username=None, is_bot=False):
+def msg_update(uid, chat_id, chat_type, sender_id, text, username=None, is_bot=False, reply_to=None):
     user = {"id": sender_id, "is_bot": is_bot}
     if username:
         user["username"] = username
+    message = {
+        "from": user,
+        "chat": {"id": chat_id, "type": chat_type},
+        "text": text,
+        "date": 1700000000 + uid,
+    }
+    if reply_to is not None:
+        message["reply_to_message"] = {"message_id": reply_to}
     return {
         "update_id": uid,
-        "message": {
-            "from": user,
-            "chat": {"id": chat_id, "type": chat_type},
-            "text": text,
-            "date": 1700000000 + uid,
-        },
+        "message": message,
     }
 
 
@@ -684,6 +687,114 @@ class IntakeClassificationTests(unittest.TestCase):
                 "6": queue_core.CLASS_REQUEST,
             },
         )
+
+
+class IntakeProtectionClassificationTests(unittest.TestCase):
+    """Re-review regression (classification): ambiguous input
+    defaults to protected. A reply, a mention of ANY participant,
+    a question/ask marker, or a correction/cancellation marker
+    each make a group message "request" — only a plain
+    unaddressed statement with no protection signal at all is
+    "conversation" and expiry-eligible. Protecting these cases
+    keeps their content available as follow-ups; it does not
+    treat the content as new authorization."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "state.json"
+        run_cli(self.path, ["--adopt", str(OWNER)])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def classes(self):
+        state = JsonStateStore(self.path).load()
+        return {
+            i["external_id"]: i["item_class"] for i in state["queue"]
+        }
+
+    def item(self, external_id):
+        state = JsonStateStore(self.path).load()
+        return next(
+            i for i in state["queue"] if i["external_id"] == str(external_id)
+        )
+
+    def test_protection_signals_and_only_plain_talk_expires(self):
+        # Poll 1 claims the owner's opening message, so poll 2's
+        # arrivals stay pending for the purge below.
+        first = run_cli(
+            self.path, [],
+            fetch=FakeFetch(
+                [msg_update(1, GROUP, "group", OWNER, "opening the room")]
+            ),
+        )
+        self.assertIsNotNone(first)
+        arrivals = [
+            # A non-owner's reply to a bot's message: a follow-up
+            # directed at earlier work — protected by the reply
+            # alone, though its text is plain.
+            msg_update(2, GROUP, "group", 222, "了解、その通りだね",
+                       "kai_bot", True, reply_to=900),
+            # A mention of ANOTHER participant (not this bot).
+            msg_update(3, GROUP, "group", 333,
+                       "@chiisamabot その案でいいと思う"),
+            # A standalone correction, mentioning nobody.
+            msg_update(4, GROUP, "group", 333, "さっきの件、やっぱりなしで"),
+            # A standalone cancellation from a bot.
+            msg_update(5, GROUP, "group", 222, "その作業は中止して",
+                       "kai_bot", True),
+            # A question-form follow-up to ongoing work.
+            msg_update(6, GROUP, "group", 333, "それ、どうなった？"),
+            # A request marker ("tell me").
+            msg_update(7, GROUP, "group", 222, "あとで結果を教えて",
+                       "kai_bot", True),
+            # The one plain unaddressed statement: no signal at
+            # all — positively ordinary conversation.
+            msg_update(8, GROUP, "group", 222, "今日のメモをここに置いておく",
+                       "kai_bot", True),
+        ]
+        self.assertIsNone(
+            run_cli(self.path, [], fetch=FakeFetch(arrivals))
+        )
+        self.assertEqual(
+            self.classes(),
+            {
+                "1": queue_core.CLASS_REQUEST,
+                "2": queue_core.CLASS_REQUEST,
+                "3": queue_core.CLASS_REQUEST,
+                "4": queue_core.CLASS_REQUEST,
+                "5": queue_core.CLASS_REQUEST,
+                "6": queue_core.CLASS_REQUEST,
+                "7": queue_core.CLASS_REQUEST,
+                "8": queue_core.CLASS_CONVERSATION,
+            },
+        )
+        # A legacy record with no classification is protected too.
+        now = time.time()
+        store = JsonStateStore(self.path)
+        with store.transaction() as state:
+            queue_core.enqueue(
+                state, platform="telegram", external_id="legacy-1",
+                chat_id=GROUP, chat_type="group", text="legacy record",
+                now=now - 7200,
+            )
+            # Age every pending arrival well past the group TTL.
+            for uid in range(2, 9):
+                queue_core.find_item(state, "telegram", uid)[
+                    "received_at"
+                ] -= 7200
+        self.assertEqual(
+            run_cli(self.path, ["--done", "1", first["claim_token"]]),
+            {"ok": True},
+        )
+        result = run_cli(self.path, ["--purge-expired"])
+        self.assertEqual(result["expired"], 1)
+        self.assertEqual(result["external_ids"], ["8"])
+        self.assertEqual(self.item(8)["status"], "done")
+        self.assertEqual(self.item(8)["done_reason"], "expired")
+        for uid in range(2, 8):
+            self.assertEqual(self.item(uid)["status"], "pending")
+        self.assertEqual(self.item("legacy-1")["status"], "pending")
 
 
 class ExpiredContextTests(unittest.TestCase):

@@ -134,12 +134,13 @@ Run from the repository root (or with the repository on `PYTHONPATH`):
 
 ```sh
 python3 -m bridge_core.telegram                      # poll once; print wake payload or nothing
-python3 -m bridge_core.telegram --send-fenced <update id> <claim token> <chat id>   # reply text on stdin
+python3 -m bridge_core.telegram --send-fenced <update id> <claim token> <chat id> [--allow-stale]   # reply text on stdin
 python3 -m bridge_core.telegram --sending <update id> <claim token>
 python3 -m bridge_core.telegram --done <update id> <claim token> [reason] [evidence]
 python3 -m bridge_core.telegram --release <update id> <claim token>
 python3 -m bridge_core.telegram --replied <update id> <reply message id> <claim token>
 python3 -m bridge_core.telegram --send-failed <update id> <claim token>
+python3 -m bridge_core.telegram --purge-expired [--older-than <seconds>] [--dry-run]
 python3 -m bridge_core.telegram --adopt <owner user id>
 ```
 
@@ -170,6 +171,17 @@ and sends) → `--replied` → `--done`.
   - send command not configured → `{"ok": false, "stage":
     "config"}` and the item stays claimed (the configuration check
     happens before the fence marks anything).
+  - the item is older than the maximum reply age
+    (`TELEGRAM_BRIDGE_MAX_REPLY_AGE`) → `{"ok": false, "stage":
+    "stale"}` and the item stays claimed, unclosed: the fence
+    refuses the send but never closes claimed work. The supported
+    way forward is the operator reassessment path below — never a
+    re-claim, which cannot change the item's intake time.
+  - `--allow-stale` (operator only; the wake flow never passes it)
+    lets one send proceed past the age guard after the operator
+    has reassessed the item. The claim token, the destination
+    binding and every other fence check still apply, and the item
+    records `stale_override: true` for audit.
 - `--sending`: mark the item as mid-send *before* a manual Bot API
   call, so a crash leaves it in `sending` (never auto-resent)
   instead of recyclable. This manual step remains for operator use;
@@ -191,7 +203,69 @@ and sends) → `--replied` → `--done`.
 - `--send-failed`: return a `sending` item to pending — only when
   the Bot API definitively rejected the send. Refused once a reply
   has been recorded for the item.
+- `--purge-expired`: run the pending-expiry sweep on demand (the
+  same sweep claiming performs) and print the expired items' ids.
+  `--older-than <seconds>` overrides the group TTL for this run
+  (private items keep their configured TTL); `--dry-run` reports
+  without changing anything.
 - `--adopt`: one-time owner bootstrap (see Setup).
+
+### Pending expiry, classification, and reassessment
+
+Unclaimed `pending` items are not kept forever: before any claim,
+and on demand via `--purge-expired`, a sweep closes old ordinary
+conversation as `done` with `done_reason` "expired" instead of
+waking a turn for it. Claimed, `sending` and replied items are
+never expired, and neither is an item that was ever claimed
+(`ever_claimed` survives the stale-claim recycle).
+
+**Classification decides eligibility, not chat type.** At intake
+the adapter stores an `item_class` on each record. Only an item
+positively identified as ordinary conversation may expire; any
+protection signal stores it as a protected `request` instead:
+
+- the sender is the owner;
+- the text is a bot command (starts with `/`);
+- the message is a reply to an earlier message (a follow-up,
+  whoever sent it);
+- the text mentions any `@username` — this bot, another agent,
+  the owner;
+- the text carries a question/request marker (the list lives in
+  `QUESTION_REQUEST_MARKERS` in `bridge_core/telegram.py`);
+- the text carries a correction/cancellation marker
+  (`CORRECTION_MARKERS`, same place).
+
+Ambiguity defaults to protected, and records with no classification
+(legacy state) are protected too. The sender being a bot is never
+an input. Group/supergroup conversation expires under
+`TELEGRAM_BRIDGE_GROUP_PENDING_TTL` (default 600s); private items
+have no TTL by default — they carry the principal's own asks.
+
+**Expired content stays closed.** Group buffer entries carry
+their queue record's id, and entries tied to an expired record are
+excluded from the actionable context of later wakes, so expired
+work cannot re-enter through a fresh item's context. Limitation:
+buffer entries with no record link (legacy entries written before
+the link existed) are retained as-is; the filtering guarantee
+applies to linked entries only.
+
+**Reassessment after a `stale` refusal.** A refused item stays
+claimed under its token. Re-claiming cannot help: the age guard
+measures from the immutable intake time, so a fresh claim hits
+the same refusal. The operator's path is:
+
+1. Re-read the item and the current state of the room: is the
+   reply still wanted, in this form, now?
+2. If not, close the item: `--done <update id> <claim token>
+   <reason>` (e.g. `superseded`).
+3. If yes, send deliberately with the override:
+   `--send-fenced <update id> <claim token> <chat id>
+   --allow-stale`, then `--replied` and `--done` as usual. The
+   item records `stale_override: true`, so the audit trail shows
+   the send was a considered operator decision, not a fence
+   bypass. The wake flow never passes `--allow-stale`; a woken
+   turn that hits `stage: "stale"` leaves the item for the
+   operator.
 
 ### Environment variables
 
@@ -200,6 +274,10 @@ and sends) → `--replied` → `--done`.
 | `TELEGRAM_BRIDGE_STATE_PATH` | State file location. Deployments always set this so state stays outside the repo. | `state.json` beside `bridge_core/telegram.py` |
 | `TELEGRAM_BRIDGE_BATCH_SIZE` | Max items claimed per wake. | `5` |
 | `TELEGRAM_BRIDGE_STALE_TTL` | Seconds before an unreplied claim may be recycled. | `1800` |
+| `TELEGRAM_BRIDGE_GROUP_PENDING_TTL` | Seconds after which an unclaimed group/supergroup item classified as ordinary conversation expires. Negative disables. | `600` |
+| `TELEGRAM_BRIDGE_PRIVATE_PENDING_TTL` | Same, for private (owner DM) items. Unset means owner DMs never expire. | unset |
+| `TELEGRAM_BRIDGE_MAX_REPLY_AGE` | Seconds after intake at which the send fence refuses a queue reply as stale. Negative disables. | `1800` |
+| `TELEGRAM_BRIDGE_BOT_USERNAME` | This deployment's bot username, recognised by the intake classifier. | `usedhonda_muse_bot` |
 | `TELEGRAM_BRIDGE_SEND_CMD` | Path to the deployment's send executable, used by `--send-fenced`. Invoked with argv `[chat id]` and the reply text on stdin; on success it must print the platform message id as the last stdout line. Unset disables the fenced send (stage `config`). | unset |
 
 ### Wake payload
@@ -303,7 +381,12 @@ bridge-core tests prove:
   beyond TTL, block their lane and refuse release, cancellation without
   evidence and repeated sends; verified non-delivery can still be
   returned to pending through token-checked `--send-failed`; a missing send
-  command leaves the item claimed).
+  command leaves the item claimed). The pending-expiry regressions live here too: intake classification
+  (owner/command/mention stay requests; a bot's plain post is conversation; replies, other-participant mentions,
+  question/ask markers and correction/cancellation markers are protected; only a plain unaddressed statement
+  expires), the operator purge and its dry run, expired entries filtered out of later wake context, non-finite
+  TTL input rejected before any mutation, stale sends refused with the claim preserved, and the operator
+  `--allow-stale` reassessment send (recorded on the item; a wrong token is still refused).
 
 ## Migration from the legacy poll.py
 
