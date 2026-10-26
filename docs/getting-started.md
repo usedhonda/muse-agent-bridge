@@ -20,6 +20,11 @@ is live. For a generic host with securely injected tokens, use the
 ## 2. Create and install the Slack app
 
 1. Create an app using `slack-app-manifest.yaml` in the intended workspace.
+   The default manifest is bot-only. An optional observer profile,
+   `slack-app-manifest.observer.yaml`, adds read-only user scopes for
+   operators who want their Muse to read and search Slack as them; it is
+   off by default, and revoking the user token later switches it off
+   without touching the bot. See the README's access section.
 2. Check `docs/slack-recommended-settings.yaml` for settings outside the manifest.
 3. Install the app and register its **bot credential** in the runtime's secure
    connection as `custom.slack-muse-bot`.
@@ -33,6 +38,30 @@ not as the owner. The default manifest now asks for bot scopes only.
 The bridge does not implement user-token-based observation. If adapting an
 existing installed Slack app, check for previously granted user scopes separately:
 removing scopes from the manifest alone does not revoke existing tokens.
+
+### Switching observation on or off later
+
+Slack grants scopes at install time, so switching is an app-settings
+operation, not a bridge setting. The bridge never uses the user token and
+needs no change or restart in either direction.
+
+To switch observation **on** for an existing installation:
+
+1. In the Slack app settings (App Manifest), replace the manifest with
+   `slack-app-manifest.observer.yaml` and save. Slack flags the added user
+   scopes.
+2. Reinstall the app to the workspace (OAuth & Permissions). Slack issues
+   the read-only user token; the bot token and the installation otherwise
+   carry over.
+3. Register the user token where your Muse's Slack read tooling expects
+   it (a secure connection, never a file in this repository).
+
+To switch it **off**:
+
+1. In OAuth & Permissions, revoke the user token. Observation stops
+   immediately; the bot and the bridge are unaffected.
+2. Optionally replace the manifest with the default bot-only one, so a
+   future reinstall does not grant the user scopes again.
 
 ## 3. Prepare a checkout and local configuration
 

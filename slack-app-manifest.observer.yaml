@@ -1,0 +1,63 @@
+# Optional observer profile. This is NOT the default manifest.
+#
+# The default `slack-app-manifest.yaml` requests bot scopes only, and the
+# bridge itself always works with the bot token alone. Choose this profile
+# only if you, the operator, want your Muse to also read and search Slack
+# as you (channel and DM history, user lookup) through tooling that consumes
+# a user token. Installing with this profile makes Slack issue a read-only
+# user token next to the bot token; the user scopes below cannot post.
+#
+# Switching off later needs no reinstall: revoke the user token in the
+# Slack app's OAuth settings and observation stops immediately. The bot,
+# and therefore the bridge, is unaffected.
+# Keep installations, tokens and real IDs out of this file.
+display_information:
+  name: Muse
+  description: Personal Muse bot for owner DMs and approved private rooms, with optional read-only observation as the owner.
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Muse
+    always_online: false
+  agent_view:
+    agent_description: Personal Muse bot. Conversations are limited to the owner
+      and explicitly configured private rooms. The optional user scopes permit
+      read-only observation as the owner; they are not used by the bridge.
+    suggested_prompts: []
+oauth_config:
+  scopes:
+    user:
+    - channels:history
+    - channels:read
+    - groups:history
+    - groups:read
+    - im:history
+    - im:read
+    - mpim:history
+    - mpim:read
+    - users:read
+    - search:read
+    bot:
+    - chat:write
+    - im:history
+    - im:read
+    - im:write
+    - groups:read
+    - groups:history
+    - assistant:write
+  pkce_enabled: false
+settings:
+  event_subscriptions:
+    bot_events:
+    - message.im
+    - message.groups
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  is_mcp_enabled: false
+  token_rotation_enabled: false
+  app_level_token_rotation_enabled: false
