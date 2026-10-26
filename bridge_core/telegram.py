@@ -54,7 +54,9 @@ Keeps the operational interface the wake hook drives:
   --send-failed ID TOKEN   return a "sending" item to pending — ONLY
                            when the Bot API definitively rejected the
                            send (the reply provably did not go out)
-  --adopt ID   set owner_id (bootstrap; main agent only)
+  --adopt ID   bind a positive owner ID once (main agent/operator only).
+               The same ID is idempotent; changing an established owner is
+               refused and requires deliberate, offline state migration.
 
 Turn protocol per replied item: --send-fenced (marks the item
 "sending" and performs the send under the fence), then --replied,
@@ -370,11 +372,25 @@ def main(argv=None, *, fetch=fetch_updates, path: Path | None = None) -> int:
     store = JsonStateStore(path or state_path())
 
     if args[:1] == ["--adopt"] and len(args) == 2:
+        # Bootstrap is a one-time operator action, not a mutable preference.
+        # Silently replacing an established owner can transfer all future DM
+        # access to the wrong Telegram account.
+        try:
+            requested = int(args[1])
+        except ValueError:
+            requested = 0
+        if requested <= 0:
+            print(json.dumps({"ok": False, "error": "invalid-owner-id"}))
+            return 2
         with store.transaction() as state:
             _ensure_adapter_state(state)
-            state["owner_id"] = int(args[1])
+            existing = state.get("owner_id")
+            if existing is not None and (type(existing) is not int or existing != requested):
+                print(json.dumps({"ok": False, "error": "owner-already-adopted"}))
+                return 2
+            state["owner_id"] = requested
             state["candidates"] = []
-        print(json.dumps({"owner_id": int(args[1])}))
+        print(json.dumps({"owner_id": requested}))
         return 0
 
     if args[:1] in (["--done"], ["--release"]) and len(args) in (2, 3, 4, 5):
