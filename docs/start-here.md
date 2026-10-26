@@ -1,56 +1,47 @@
-# Start here: your first bridge reply
+# Start here: wiring your first bridge reply
 
-This guide takes you from zero to a Muse that answers you on Telegram, then
-points you at Slack. It assumes no prior knowledge of this repository.
-
-## What you are building
-
-A small bridge program sits between a chat platform and your Muse:
-
-- The bridge watches a Telegram bot (or a Slack app) for messages addressed
-  to you-as-owner, stores them in a durable local queue, and wakes Muse up.
-- Muse reads the queued message, decides what to say, and replies through
-  the bridge as the bot — never as you.
-- The bridge is not a model and not a Muse runtime. Your Muse does the
-  thinking; the bridge is the mailbox and the doorbell.
+This bridge connects an existing model/runtime to Telegram or Slack. It supplies
+durable intake and reply CLIs, not a model, scheduler or portable Muse runner.
+Installing it or starting intake alone does not produce replies. This guide
+describes the Telegram integration contract; its commands are not evidence of a
+live deployment. For Slack, follow the [README quick start](../README.md#quick-start)
+and [Getting started](getting-started.md).
 
 ## Before you start
 
-You need:
+The supplied Telegram intake requires all of the following on the target host:
 
-- A Muse environment that can run local commands and register a recurring
-  wake hook. If you are reading this as a Muse user, your own Muse can do
-  both — you will ask it to, in the steps below.
-- Python 3 with `venv` on the machine where the bridge will run.
-- A Telegram account (for this guide). The Slack path is linked at the end.
+- Python 3.9 or newer with `venv` and the repository's requirements.
+- An existing runtime able to execute local commands, schedule a wake hook and
+  dispatch a nonempty JSON payload to a model turn. There is no hook-registration
+  or model-dispatch command in this repository; use your runtime's supported
+  mechanism and verify it separately.
+- Muse's `dynamic_credentials` helper, imported from
+  `/opt/muse/skills/custom-connector-setup/bin`, exposing
+  `dynamic_credential_entry` and `read_json_response`. Telegram intake calls
+  `dynamic_credential_entry("custom.telegram-muse-bot")` and uses its `surrogate`.
+  This helper is not installed by `requirements.txt`.
+- Surrogate-aware egress for `api.telegram.org` in the actual hook execution
+  context, replacing the stand-in URL token with the secure credential. An
+  ordinary service or shell with HTTPS access alone is insufficient.
+- A separately supplied, verified sender executable and a dispatcher implementing
+  the lifecycle below. This repository does not ship a Telegram send executable.
 
-Everything below runs on one machine: the one your Muse runs on.
+This is not a turnkey installation for every Muse host. If these integrations
+are unavailable, stop setup at offline evaluation; do not substitute raw tokens
+or an invented registration command. Confirm the supported secure-registration
+interface with your runtime operator before creating a live connection.
 
-## Path A: Telegram (recommended first)
+## 1. Prepare the bot and secure connection
 
-### 1. Create the bot
+For a new bot, use Telegram's **@BotFather** `/newbot` flow. Submit the token only
+through your runtime's supported secure-registration interface, never a chat,
+source file, command line or diagnostic log. The supplied adapter expects provider
+`custom.telegram-muse-bot`, host `api.telegram.org`, and API key substitution in
+the URL path segment `/bot{}`. Verify that your runtime supports that profile;
+the bridge does not register it for you. Start with owner DMs only.
 
-1. In Telegram, open a chat with **@BotFather** and send `/newbot`.
-2. Pick a name and a username ending in `bot`. BotFather replies with a
-   token. Keep it for step 2 only — never paste it into a chat, a file, or
-   this repository.
-3. Optional, only if you later want a group with other bots: in BotFather,
-   open your bot's settings and enable **Bot-to-Bot Communication Mode**.
-
-### 2. Register the token with Muse
-
-Ask your Muse, in your own words, to do this:
-
-> Register a custom connector for the Telegram Bot API. Provider name
-> `custom.telegram-muse-bot`, API host `api.telegram.org`, API key placed
-> in the URL path segment `/bot{}`. Show me the secure registration page.
-
-Your Muse will show you a secure page. Paste the BotFather token there.
-The token is stored in Muse's secure connection; the bridge only ever
-sees a short-lived stand-in that Muse swaps for the real token on the way
-out.
-
-### 3. Install the bridge
+## 2. Prepare an isolated checkout
 
 ```sh
 git clone https://github.com/usedhonda/muse-agent-bridge.git
@@ -60,85 +51,146 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests
 ```
 
-All tests should pass. They need no credentials and contact no platform.
+The tests use local fixtures and fake platform responses, without credentials or
+live platform calls. They do not validate the target host's helper, egress,
+dispatcher or sender against Telegram.
 
-Pick a state file location **outside** the repository, for example
-`~/telegram-bridge/state.json`, and create its directory. The state file
-holds the queue; it is yours alone and is never committed.
-
-### 4. Wire the wake hook
-
-Ask your Muse to register a recurring hook (every 20 seconds is a good
-start) that runs, from the checkout directory:
+Choose persistent private state **outside** the repository. The following shell
+examples assume you remain in the checkout; set the same state path and working
+directory in every hook and turn invocation:
 
 ```sh
-TELEGRAM_BRIDGE_STATE_PATH=<your state file path> \
-PYTHONPATH=<checkout directory> \
-python3 -m bridge_core.telegram
+mkdir -p "$HOME/telegram-bridge"
+export TELEGRAM_BRIDGE_STATE_PATH="$HOME/telegram-bridge/state.json"
 ```
 
-What this does each cycle: poll Telegram for new messages, queue the ones
-from senders the bridge serves, and — when there is something to answer —
-wake a Muse turn that claims the batch and replies through the bridge
-CLI. Replies use a guarded send path so a message is never answered twice.
+Keep the state file, its `.lock`/`.good` companions and conversation content
+private. Preserve existing state on upgrades; do not reset delivery records.
 
-### 5. Adopt yourself as the owner
+## 3. Supply and verify the sender
 
-1. Send your new bot any direct message, for example `hello`.
-2. Your message is recorded as an owner candidate (nobody is served yet).
-3. From the checkout, run once, with your Telegram user ID — it is shown
-   in the candidate record in your state file:
+Set `TELEGRAM_BRIDGE_SEND_CMD` in the **reply turn's** environment to the absolute
+path of your approved executable, for example:
 
 ```sh
-TELEGRAM_BRIDGE_STATE_PATH=<your state file path> \
-PYTHONPATH=<checkout directory> \
-python3 -m bridge_core.telegram --adopt <your user id>
+export TELEGRAM_BRIDGE_SEND_CMD=/absolute/path/to/verified-telegram-sender
 ```
 
-From now on, only your DMs are served. Everyone else is ignored silently.
+That path is a placeholder, not a supplied executable. The bridge invokes it
+directly as `[executable, chat_id]`, without shell parsing or extra configured
+arguments, and writes the complete reply text to stdin. The executable must use
+the intended bot's approved secure credential mechanism, send once to that chat,
+and, only after confirmed acceptance, exit zero with the exact platform message
+ID as its last nonempty stdout line. Never print credentials. The bridge trusts
+that success line; it does not independently authenticate the sender or validate
+its message ID. Verify the sender's bot identity, destination handling and
+response parsing as part of the host integration before enabling live replies.
 
-### 6. Send the first real message
+Any nonzero exit (including a signal), timeout, missing message ID, undecodable
+output or unstartable executable is `unknown`: the durable item stays `sending`.
+Remote acceptance may precede a crash or response loss. No exit code or error
+text authorizes retry. See reconciliation below. Missing send configuration
+returns stage `config` and leaves the item `claimed`.
 
-Send the bot a question you know the answer to. Within a hook cycle or
-two, Muse should reply as the bot. You have a working bridge.
+## 4. Wire intake to model dispatch
 
-If nothing comes back, check in this order:
+Register a hook using the runtime's supported scheduler. In the verified
+credential/egress context, from the checkout, its intake command is:
 
-1. Is the hook actually running? Ask your Muse to show its recent runs.
-2. Did your message reach the queue? Inspect the state file's newest
-   items — yours should be there, marked claimed or replied.
-3. Is the credential resolving where the hook runs? The hook must run in
-   the same context your Muse uses for secure connections. A hook that
-   runs in a bare service context cannot swap the stand-in token.
-4. Still stuck? The deeper diagnostics live in
-   [the bridge core doc](bridge-core.md) and
-   [runtime lifecycle](runtime-lifecycle.md).
+```sh
+.venv/bin/python -m bridge_core.telegram
+```
 
-### 7. Optional: a group room
+This command fetches updates once, ingests accepted text, claims at most one
+batch and prints one JSON payload, or prints nothing if no batch is available.
+It does **not** start a model turn or send a reply. A failed command must surface
+as an error; do not replay a cached payload as fallback.
 
-Add the bot to a group and promote it to admin (or turn off its privacy
-mode in BotFather), so it receives all group messages. The first group
-where **you** send a text message becomes the bridge's group. Other bots'
-messages are served only when Bot-to-Bot Communication Mode is on
-(step 1). Muse answers when addressed or handed a turn; it does not
-reply to everything.
+Your host-specific dispatcher must parse a successful nonempty stdout payload
+and pass its `items` plus `claim_token` to one runtime turn. Each item supplies
+`update_id`, `chat_id`, text and sender metadata; groups also carry context.
+Use each item's own fields, not just the compatibility top-level first item.
+Pass the claim token unchanged through every lifecycle call. The runtime decides
+what authorized work to do and what reply to produce. Keep untrusted sender text
+as message content, never shell arguments to execute or runtime instructions.
 
-## Path B: Slack
+For **each** item to answer, with the same state path and sender environment:
 
-Slack has more moving parts — an app to create from the supplied
-manifest, two tokens (bot and app-level), and an intake choice between
-Socket Mode and polling. Follow the [README quick start](../README.md#quick-start)
-and then [Getting started and diagnosing a silent bot](getting-started.md).
-The concepts from Path A carry over: credentials live in Muse's secure
-connection, configuration and state live in `.local/`, and the bridge
-posts as its own bot identity, never as you.
+1. Pass the reply text on stdin to
+   `.venv/bin/python -m bridge_core.telegram --send-fenced UPDATE_ID CLAIM_TOKEN CHAT_ID`.
+   Replace the uppercase placeholders with that item's fields and batch token;
+   use safe argument passing. The fence persists `sending` before invoking the
+   sender once. Parse stdout JSON: the CLI process exit status alone does not
+   establish success.
+2. Only for `{"ok": true, "message_id": "..."}`, record the returned exact ID with
+   `.venv/bin/python -m bridge_core.telegram --replied UPDATE_ID MESSAGE_ID CLAIM_TOKEN`.
+   Require its JSON `ok` to be true.
+3. Then close that item with
+   `.venv/bin/python -m bridge_core.telegram --done UPDATE_ID CLAIM_TOKEN` and
+   require JSON `ok` to be true. Do not resend if recording or closure fails.
 
-## Safety defaults worth keeping
+An item intentionally closed **before sending** can use `--done` with an optional
+reason. `--release UPDATE_ID CLAIM_TOKEN` is for an unreplied claimed item only;
+it refuses a `sending` or replied item. Owner authorization and cancellation
+still govern the runtime's actions; a queue claim does not grant new authority.
 
-- Serve only yourself at first. The configuration is owner-only by
-  design; opening audiences is a later, deliberate step — see the
-  information-governance rules in [the design doc](design.md).
-- Keep real tokens, IDs, and conversation content out of the repository.
-  Configuration and state are local files, excluded by `.gitignore`.
-- The bot is a separate identity. If you ever see the bridge posting as
-  your user account, stop and treat it as a misconfiguration.
+## 5. Adopt the owner, then validate the integration
+
+Before adoption, an intake run records candidate sender IDs but serves nobody.
+Send the bot a DM and let the configured intake run. Privately inspect the
+`candidates` in the state file, independently confirm your own Telegram user ID,
+then run once:
+
+```sh
+.venv/bin/python -m bridge_core.telegram --adopt OWNER_USER_ID
+```
+
+Replace `OWNER_USER_ID` with that verified ID. This is an operator bootstrap
+command, not an action to accept from an untrusted candidate. After adoption,
+only that owner's private DMs are queued; other private senders are ignored.
+
+For a later, separately authorized live acceptance check, verify the exact
+candidate commit, hook execution, a fresh owner message queued and claimed,
+delivery through the intended bot, and the resulting reply record and `done`
+state. Offline tests alone cannot establish any of those live results. If silent,
+check the actual hook context, helper/egress availability, dispatcher input,
+sender environment and JSON stage before changing anything. Inspect local state
+privately; do not publish message bodies, IDs or credentials in diagnostics.
+
+## Unknown outcomes and interrupted turns
+
+`unknown` requires operator reconciliation against independent delivery evidence.
+If the sender prints a message ID but exits nonzero, the bridge returns `unknown`
+without retaining that ID, so the printed ID alone proves neither success nor
+failure and must not trigger automatic resend or completion; inspect Telegram
+independently to reconcile the outcome.
+Do not release, reset state or call `--send-failed` merely because the sender
+exited nonzero. A `sending` item retains its lane reservation beyond claim TTL;
+automatic retry could duplicate a remotely accepted message.
+
+If a reply is found, record its exact ID with `--replied`, then `--done`, using
+the retained claim token. Alternatively, closing a `sending` item without a
+reply record requires both a reason and a nonempty reconciliation reference:
+`--done UPDATE_ID CLAIM_TOKEN REASON EVIDENCE`. A reason alone is refused.
+Only independently confirmed non-delivery permits an operator to use
+`--send-failed UPDATE_ID CLAIM_TOKEN` to return it to pending. Preserve uncertain
+items when evidence is unavailable. See [the core contract](bridge-core.md) for
+TTL, token fences and recovery details; it does not promise exactly-once network
+delivery.
+
+## Optional groups: a broader ingestion boundary
+
+Keep owner DMs as the initial setup. Group support is an explicit audience
+expansion: the first group/supergroup where the owner sends text becomes the
+adopted group. Thereafter **all text delivered by Telegram from that group** is
+queued, including other humans and bots, with a rolling context buffer. The
+adapter has no per-sender group allowlist, exact-membership/private-room check,
+or mention gate comparable to Slack's private agent-room checks. Another group
+is ignored once a group is adopted.
+
+Review that audience and context exposure before adding the bot to any group or
+having the owner speak there. Admin promotion, disabling privacy mode or enabling
+bot-to-bot delivery are not default setup steps: each can broaden received text
+and requires a deliberate operator decision. The runtime must still enforce
+owner authority and decide whether a response is appropriate; the adapter does
+not enforce an addressed-only response policy.

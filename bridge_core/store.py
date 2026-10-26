@@ -25,6 +25,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -48,7 +49,10 @@ class JsonStateStore:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Newly created private state directories must not expose names or
+        # metadata to other local users. Existing directories are left to
+        # their operator; migration guidance covers checking old permissions.
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
         self.snapshot_path = self.path.with_name(self.path.name + ".good")
 
@@ -82,12 +86,23 @@ class JsonStateStore:
         return {}
 
     def _write_atomic(self, target: Path, raw: str) -> None:
-        tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
-        with open(tmp, "w", encoding="utf-8") as handle:
-            handle.write(raw)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, target)
+        # The queue and .good snapshot contain private conversations. Creating
+        # temp files with open(..., "w") inherits the process umask and can
+        # publish mode 0644 on common hosts. mkstemp creates mode 0600
+        # regardless of a permissive umask, and a unique name also avoids
+        # stale same-PID temp-file collisions.
+        fd, tmp = tempfile.mkstemp(
+            dir=target.parent, prefix=f"{target.name}.tmp."
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, target)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
     def _save_unlocked(self, state: dict) -> None:
         raw = json.dumps(state, ensure_ascii=False)

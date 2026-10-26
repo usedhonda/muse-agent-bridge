@@ -1,9 +1,9 @@
 # Owner-only deployment profile, matching the existing secretary app settings.
-# User scopes permit read-only observation; the bridge uses only the bot token.
+# The bridge uses only the bot token. Do not grant unused user read scopes.
 # Keep installations, tokens and real IDs out of this file.
 display_information:
   name: Muse
-  description: Personal agent Muse. Owner-only DM and read-only observation.
+  description: Personal Muse bot for owner DMs and approved private rooms.
 features:
   app_home:
     home_tab_enabled: false
@@ -13,22 +13,11 @@ features:
     display_name: Muse
     always_online: false
   agent_view:
-    agent_description: Personal agent Muse. Conversations are limited to the owner
-      and the approved private channel; other workspace messages are read-only observations.
+    agent_description: Personal Muse bot. Conversations are limited to the owner
+      and explicitly configured private rooms. No general workspace observation.
     suggested_prompts: []
 oauth_config:
   scopes:
-    user:
-    - channels:history
-    - channels:read
-    - groups:history
-    - groups:read
-    - im:history
-    - im:read
-    - mpim:history
-    - mpim:read
-    - users:read
-    - search:read
     bot:
     - chat:write
     - im:history

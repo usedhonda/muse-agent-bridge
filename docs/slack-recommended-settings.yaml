@@ -21,8 +21,9 @@ app:
     messages_tab: enabled # required for DM with the bot
     messages_tab_read_only: false
   oauth:
-    user_scopes: manifest # read-only observation scopes, matching the existing secretary app
-    # The bridge uses only the bot token; user observation is not implemented.
+    user_scopes: [] # no user OAuth token or workspace-wide observation for the bridge
+    # Observation is not implemented. Do not add unused user read scopes
+    # merely to match another existing app's more permissive settings.
     redirect_urls: [] # Socket Mode installs need no redirect URL
 
 workspace_admin:

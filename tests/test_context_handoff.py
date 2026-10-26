@@ -77,5 +77,29 @@ audiences:
                                      ['synthetic later correction', 'synthetic owner cancellation'])
                 else:
                     self.assertEqual(output.getvalue(), '')
-                    self.assertEqual(json.loads(errors.getvalue())['claim_preserved'], True)
+                    raw_errors = errors.getvalue()
+                    # The CLI diagnostic is one JSON object per line on
+                    # stderr. Unrelated interpreter warnings (for example a
+                    # ResourceWarning emitted when the garbage collector
+                    # finalizes an unclosed sqlite connection leaked by an
+                    # earlier test) can share the captured stream, so parse
+                    # the JSON lines instead of assuming the whole buffer
+                    # is a single document (issue #11).
+                    diagnostic = None
+                    for line in raw_errors.splitlines():
+                        line = line.strip()
+                        if line.startswith('{'):
+                            try:
+                                diagnostic = json.loads(line)
+                            except json.JSONDecodeError:
+                                pass
+                    # Keep the same pass condition, but make a missing
+                    # diagnostic explain itself: the SystemExit raised by
+                    # main() suppresses display of the original exception,
+                    # which remains available as __context__.
+                    self.assertEqual(
+                        bool(diagnostic) and diagnostic.get('claim_preserved'), True,
+                        f'claim_preserved diagnostic missing or malformed: '
+                        f'stderr={raw_errors!r}; exit __context__: '
+                        f'{failure.exception.__context__!r}')
                     self.assertNotIn('synthetic later correction', errors.getvalue())
