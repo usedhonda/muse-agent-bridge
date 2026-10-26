@@ -536,16 +536,19 @@ class PurgeExpiredTests(unittest.TestCase):
                 state, platform="telegram", external_id="g-old",
                 chat_id=GROUP, chat_type="group", text="old group",
                 now=now - 3600,
+                item_class=queue_core.CLASS_CONVERSATION,
             )
             queue_core.enqueue(
                 state, platform="telegram", external_id="g-mid",
                 chat_id=GROUP, chat_type="group", text="mid group",
                 now=now - 300,
+                item_class=queue_core.CLASS_CONVERSATION,
             )
             queue_core.enqueue(
                 state, platform="telegram", external_id="dm-old",
                 chat_id=OWNER, chat_type="private", text="old dm",
                 now=now - 86400,
+                item_class=queue_core.CLASS_REQUEST,
             )
 
     def tearDown(self):
@@ -604,6 +607,204 @@ class PurgeExpiredTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertFalse(json.loads(out.getvalue())["ok"])
         self.assertEqual(self.item("g-old")["status"], "pending")
+
+    def test_purge_rejects_non_finite_older_than_without_mutation(self):
+        """Finding 5 regression: float() parses "nan"/"inf", but a
+        NaN threshold would expire every eligible item and an
+        infinite one none — both are input errors, rejected with
+        the usage error before any state changes."""
+        for bad in ("nan", "inf", "-inf"):
+            with self.subTest(older_than=bad):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    rc = telegram.main(
+                        ["--purge-expired", "--older-than", bad],
+                        fetch=FakeFetch(),
+                        path=self.path,
+                    )
+                self.assertEqual(rc, 2)
+                self.assertFalse(json.loads(out.getvalue())["ok"])
+                for external_id in ("g-old", "g-mid", "dm-old"):
+                    item = self.item(external_id)
+                    self.assertEqual(item["status"], "pending")
+                    self.assertNotIn("done_reason", item)
+
+
+class IntakeClassificationTests(unittest.TestCase):
+    """Finding 2 regression: classification is decided at intake
+    by evidence of being addressed — the sender is the owner, the
+    text is a bot command, or it mentions the bot — never by chat
+    type and never by the sender being a bot."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "state.json"
+        run_cli(self.path, ["--adopt", str(OWNER)])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def classes(self):
+        state = JsonStateStore(self.path).load()
+        return {
+            i["external_id"]: i["item_class"] for i in state["queue"]
+        }
+
+    def test_intake_classification_rules(self):
+        fetch = FakeFetch(
+            [
+                # The owner's group message adopts the group; the
+                # sender being the owner makes it a request.
+                msg_update(1, GROUP, "group", OWNER, "opening the room"),
+                # A bot's plain post: conversation. Sender being a
+                # bot does not decide the class either way.
+                msg_update(2, GROUP, "group", 222, "plain agent chatter",
+                           "kai_bot", True),
+                # A mention of the bot (any case) is a request.
+                msg_update(3, GROUP, "group", 333, "hey @Usedhonda_Muse_Bot check this"),
+                # A bot command is a request.
+                msg_update(4, GROUP, "group", 333, "/status please"),
+                # A bot addressing this bot is a request, exactly
+                # like a human addressing it.
+                msg_update(5, GROUP, "group", 222, "@usedhonda_muse_bot take this",
+                           "kai_bot", True),
+                # The owner's DM is a request.
+                msg_update(6, OWNER, "private", OWNER, "a dm ask"),
+            ]
+        )
+        run_cli(self.path, [], fetch=fetch)
+        self.assertEqual(
+            self.classes(),
+            {
+                "1": queue_core.CLASS_REQUEST,
+                "2": queue_core.CLASS_CONVERSATION,
+                "3": queue_core.CLASS_REQUEST,
+                "4": queue_core.CLASS_REQUEST,
+                "5": queue_core.CLASS_REQUEST,
+                "6": queue_core.CLASS_REQUEST,
+            },
+        )
+
+
+class ExpiredContextTests(unittest.TestCase):
+    """Finding 4 regression: group buffer entries carry their
+    queue record's external_id, and an expired record's text is
+    excluded from the actionable context of later wakes — expired
+    work cannot re-enter through a fresh item's context."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "state.json"
+        run_cli(self.path, ["--adopt", str(OWNER)])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def item(self, external_id):
+        state = JsonStateStore(self.path).load()
+        return next(
+            i for i in state["queue"] if i["external_id"] == str(external_id)
+        )
+
+    def test_expired_item_is_absent_from_later_wake_context(self):
+        # Poll 1 claims the owner's opening message (batch in
+        # flight), so poll 2's arrivals stay pending.
+        first = run_cli(
+            self.path, [],
+            fetch=FakeFetch(
+                [msg_update(10, GROUP, "group", OWNER, "room open")]
+            ),
+        )
+        self.assertIsNotNone(first)
+        blocked = run_cli(
+            self.path, [],
+            fetch=FakeFetch(
+                [
+                    msg_update(11, GROUP, "group", 222, "stale chatter",
+                               "kai_bot", True),
+                    msg_update(12, GROUP, "group", 222, "kept chatter",
+                               "kai_bot", True),
+                ]
+            ),
+        )
+        self.assertIsNone(blocked)
+        # Buffer entries are tied to their queue records.
+        state = JsonStateStore(self.path).load()
+        by_text = {e["text"]: e for e in state["group_buffer"]}
+        self.assertEqual(by_text["stale chatter"]["external_id"], "11")
+        self.assertEqual(by_text["kept chatter"]["external_id"], "12")
+        # Age only the first arrival, then purge: it expires; the
+        # fresh one stays pending.
+        store = JsonStateStore(self.path)
+        with store.transaction() as state:
+            queue_core.find_item(state, "telegram", 11)[
+                "received_at"
+            ] -= 7200
+        result = run_cli(self.path, ["--purge-expired"])
+        self.assertEqual(result["expired"], 1)
+        self.assertEqual(result["external_ids"], ["11"])
+        self.assertEqual(self.item(11)["status"], "done")
+        self.assertEqual(self.item(11)["done_reason"], "expired")
+        self.assertEqual(self.item(12)["status"], "pending")
+        # Close the first batch and poll a fresh arrival: its wake
+        # context keeps the live entries and drops the expired one.
+        self.assertEqual(
+            run_cli(self.path, ["--done", "10", first["claim_token"]]),
+            {"ok": True},
+        )
+        payload = run_cli(
+            self.path, [],
+            fetch=FakeFetch(
+                [msg_update(13, GROUP, "group", OWNER, "fresh question")]
+            ),
+        )
+        self.assertEqual(payload["count"], 2)
+        for view in payload["items"]:
+            texts = [entry["text"] for entry in view["context"]]
+            self.assertIn("room open", texts)
+            self.assertIn("kept chatter", texts)
+            self.assertIn("fresh question", texts)
+            self.assertNotIn("stale chatter", texts)
+
+
+class NumericInputValidationTests(unittest.TestCase):
+    """Finding 5 regression at the adapter layer: non-finite TTL /
+    max-reply-age environment values fall back to the documented
+    defaults before they can reach any mutation, while a finite
+    negative keeps the disable convention."""
+
+    def test_env_ttls_reject_non_finite_values(self):
+        for bad in ("nan", "inf", "-inf"):
+            with self.subTest(value=bad):
+                with mock.patch.dict(
+                    os.environ, {telegram.GROUP_PENDING_TTL_ENV: bad}
+                ):
+                    group_ttl, private_ttl = telegram._expiry_ttls()
+                self.assertEqual(
+                    group_ttl, queue_core.DEFAULT_GROUP_PENDING_TTL
+                )
+                self.assertIsNone(private_ttl)
+                with mock.patch.dict(
+                    os.environ, {telegram.MAX_REPLY_AGE_ENV: bad}
+                ):
+                    self.assertEqual(
+                        telegram._max_reply_age(),
+                        telegram.DEFAULT_MAX_REPLY_AGE,
+                    )
+
+    def test_env_ttls_keep_finite_and_negative_conventions(self):
+        with mock.patch.dict(
+            os.environ, {telegram.GROUP_PENDING_TTL_ENV: "120"}
+        ):
+            self.assertEqual(telegram._expiry_ttls()[0], 120.0)
+        with mock.patch.dict(
+            os.environ, {telegram.GROUP_PENDING_TTL_ENV: "-5"}
+        ):
+            self.assertIsNone(telegram._expiry_ttls()[0])
+        with mock.patch.dict(
+            os.environ, {telegram.PRIVATE_PENDING_TTL_ENV: "nan"}
+        ):
+            self.assertIsNone(telegram._expiry_ttls()[1])
 
 
 if __name__ == "__main__":

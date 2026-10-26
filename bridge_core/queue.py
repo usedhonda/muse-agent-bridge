@@ -42,14 +42,20 @@ Claim discipline (the rules that keep wake turns from double-answering):
   second claim. After a recycle the old batch token no longer matches,
   so the stale turn's late transition calls are all rejected.
 - Unclaimed ``pending`` items are not kept forever either: before any
-  claim, a sweep expires group/supergroup items older than their
-  class TTL (default 600s). An expired item is closed ``done`` with
-  reason "expired" and never woken — a turn answering hours-old room
-  chatter only produces late, off-context replies. Private (owner DM)
-  items have no TTL by default: they carry the principal's own asks,
-  and dropping one silently is worse than a late wake. The sweep
-  never touches claimed, sending or replied items, in any class
-  (see ``expire_stale_pending``).
+  claim, a sweep expires old ordinary conversation instead of waking
+  a turn for it — a turn answering hours-old room chatter only
+  produces late, off-context replies. Expiry is deliberately
+  narrow. Only an item whose intake classification (``item_class``)
+  is explicitly "conversation" can expire, and only under its chat
+  class TTL (group/supergroup default 600s; private items have no
+  TTL by default — they carry the principal's own asks, and
+  dropping one silently is worse than a late wake). Requests,
+  corrections, follow-ups to open work and legacy records with no
+  classification are never expired by the sweep. Neither is an item
+  that was ever claimed (``ever_claimed``): once a turn has taken
+  work, the work is preserved for reassessment, however it later
+  returns to ``pending``. Claimed, sending and replied items are
+  likewise never touched (see ``expire_stale_pending``).
 - A batch is a single conversation lane: ``claim_batch`` takes items
   of one platform and one chat only (the lane of the oldest pending
   item for the requested platform), so a turn never mixes platforms
@@ -60,6 +66,7 @@ and ``replied_at`` so intake latency can be measured end to end.
 """
 from __future__ import annotations
 
+import math
 import secrets
 import time
 
@@ -73,9 +80,20 @@ DEFAULT_STALE_TTL = 1800.0
 DEFAULT_GROUP_PENDING_TTL = 600.0
 
 #: done_reason recorded when an item is closed for exceeding its
-#: age limit (the claim-time sweep, the operator purge, or the send
-#: fence's stale guard).
+#: age limit (the claim-time sweep or the operator purge).
 EXPIRED_REASON = "expired"
+
+#: Intake classifications stored on the queue record as
+#: ``item_class``. Only CLASS_CONVERSATION ("ordinary conversation")
+#: is eligible for pending expiry; CLASS_REQUEST marks work that
+#: must be preserved — messages addressed to the agent, commands,
+#: and anything from the owner. A record with no classification
+#: (legacy state, or an adapter that does not classify) is treated
+#: as protected, never as conversation: chat type is not request
+#: classification, and when the class is unclear, not dropping the
+#: item is the safe side.
+CLASS_CONVERSATION = "conversation"
+CLASS_REQUEST = "request"
 
 #: Chat types whose unclaimed items expire under ``group_ttl``.
 #: Private (owner DM) items are deliberately NOT in this set: they
@@ -125,11 +143,19 @@ def enqueue(
     is_bot: bool = False,
     text: str = "",
     date=None,
+    item_class: str | None = None,
     now: float | None = None,
 ) -> dict | None:
     """Append an item unless (platform, external_id) is already known.
 
     Returns the new item, or ``None`` when it was a duplicate delivery.
+
+    ``item_class`` is the adapter's intake classification
+    (CLASS_CONVERSATION or CLASS_REQUEST); it decides pending-expiry
+    eligibility and nothing else. ``ever_claimed`` starts False and
+    is set permanently at the first claim: it is the record that
+    this work was already taken once, which excludes it from the
+    expiry sweep forever (see ``expire_stale_pending``).
     """
     ensure_state(state)
     if find_item(state, platform, external_id) is not None:
@@ -144,6 +170,8 @@ def enqueue(
         "is_bot": bool(is_bot),
         "text": text,
         "date": date,
+        "item_class": item_class,
+        "ever_claimed": False,
         "received_at": _now(now),
         "status": PENDING,
         "claimed_at": None,
@@ -172,6 +200,9 @@ def _recycle_stale(state: dict, stale_ttl: float, now: float) -> None:
             item["status"] = PENDING
             item["claimed_at"] = None
             item["claim_token"] = None
+            # ever_claimed deliberately survives the recycle: the
+            # claim history is what keeps a recycled item out of the
+            # first-pending expiry sweep on every later poll.
 
 
 def pending_ttl(
@@ -182,19 +213,43 @@ def pending_ttl(
 ) -> float | None:
     """The expiry TTL (seconds) for an unclaimed item, or None.
 
-    Group/supergroup conversation items expire under ``group_ttl``
-    (None disables even that). Private items return ``private_ttl``
-    — None (never expire) unless an operator explicitly opted the
-    owner's DMs into expiry. Items with any other (or no) chat type
-    never expire: when the class is unclear, not dropping the item
-    is the safe side.
+    Eligibility starts with the intake classification: only an item
+    explicitly classified CLASS_CONVERSATION can expire at all.
+    Requests and unclassified/legacy records return None whatever
+    their chat type — chat type is not request classification.
+
+    For a conversation item, group/supergroup chats expire under
+    ``group_ttl`` and private chats under ``private_ttl`` — None
+    (never expire) unless an operator explicitly opted the owner's
+    DMs into expiry. Items with any other (or no) chat type never
+    expire. A negative TTL disables the limit it tunes, matching
+    the adapter layer's documented convention.
     """
+    if item.get("item_class") != CLASS_CONVERSATION:
+        return None
     chat_type = item.get("chat_type")
     if chat_type in GROUP_CHAT_TYPES:
-        return group_ttl
-    if chat_type == "private":
-        return private_ttl
-    return None
+        ttl = group_ttl
+    elif chat_type == "private":
+        ttl = private_ttl
+    else:
+        return None
+    if ttl is not None and ttl < 0:
+        return None
+    return ttl
+
+
+def _validate_ttl(name: str, ttl: float | None) -> None:
+    """Reject a non-finite TTL before anything is mutated.
+
+    A NaN TTL compares false against every age, which would make
+    ``age > ttl`` true for all eligible items and expire the whole
+    class at once; an infinite TTL silently disables expiry. Both
+    are configuration errors, not limits — fail loudly instead.
+    Finite values, including the negative disable convention, pass.
+    """
+    if ttl is not None and not math.isfinite(ttl):
+        raise ValueError(f"{name} must be finite or None, got {ttl!r}")
 
 
 def expire_stale_pending(
@@ -214,23 +269,36 @@ def expire_stale_pending(
     silently.
 
     Only items still in ``pending`` with no recorded reply are
-    eligible. Claimed, ``sending`` and replied items are NEVER
-    expired, in any class: a replied item's answer already went out,
-    and a ``sending`` item's outcome may be unknown, so expiring
-    either could resurrect it for a duplicate send. A ``pending``
-    item with a recorded reply (legacy or hand-edited state) is
-    likewise left for operator reconciliation, exactly as
+    eligible, and only with an explicit intake classification of
+    CLASS_CONVERSATION under their chat class TTL (see
+    ``pending_ttl``). Requests and unclassified/legacy records are
+    never expired. Neither is an item that was ever claimed:
+    ``ever_claimed`` survives the stale-claim recycle, so work a
+    turn already took is preserved for reassessment instead of
+    being swept on a later poll. Claimed, ``sending`` and replied
+    items are NEVER expired either: a replied item's answer already
+    went out, and a ``sending`` item's outcome may be unknown, so
+    expiring either could resurrect it for a duplicate send. A
+    ``pending`` item with a recorded reply (legacy or hand-edited
+    state) is likewise left for operator reconciliation, exactly as
     ``claim_batch`` leaves it unclaimable.
+
+    Non-finite TTLs (NaN, infinities) raise ValueError before
+    anything is mutated.
 
     With ``dry_run`` the eligible items are returned but nothing is
     mutated. Returns the expired (or, for a dry run, expirable)
     items, in queue order.
     """
+    _validate_ttl("group_ttl", group_ttl)
+    _validate_ttl("private_ttl", private_ttl)
     ensure_state(state)
     now = _now(now)
     expired = []
     for item in state["queue"]:
         if item["status"] != PENDING or item["replied_at"] is not None:
+            continue
+        if item.get("ever_claimed"):
             continue
         if platform is not None and item["platform"] != platform:
             continue
@@ -280,11 +348,12 @@ def claim_batch(
     Before selection, unclaimed pending items past their class TTL
     are expired in the same call (see :func:`expire_stale_pending`),
     so an item the sweep closes is never claimed here either. The
-    sweep runs BEFORE the stale-claim recycle: an item recycled by
-    this call keeps the pre-existing behavior (it is claimable
-    immediately) and is swept on a later call if still unclaimed —
-    while the send fence's own stale guard still refuses to send
-    for it once it is too old.
+    sweep runs BEFORE the stale-claim recycle, and it can never
+    reach a recycled item at all: claiming sets ``ever_claimed``,
+    which permanently excludes the item from first-pending expiry,
+    so work recycled by this call (or any earlier one) and left
+    behind by the batch limit stays claimable on later polls
+    instead of expiring.
 
     Returns ``{"claim_token": str, "items": [item, ...]}`` or
     ``None`` when there is nothing eligible to claim or every
@@ -333,6 +402,7 @@ def claim_batch(
         item["status"] = CLAIMED
         item["claimed_at"] = now
         item["claim_token"] = token
+        item["ever_claimed"] = True
     return {"claim_token": token, "items": batch}
 
 
