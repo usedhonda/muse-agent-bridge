@@ -20,6 +20,11 @@ is live. For a generic host with securely injected tokens, use the
 ## 2. Create and install the Slack app
 
 1. Create an app using `slack-app-manifest.yaml` in the intended workspace.
+   The default manifest is bot-only. An optional observer profile,
+   `slack-app-manifest.observer.yaml`, adds read-only user scopes for
+   operators who want their Muse to read and search Slack as them; it is
+   off by default, and revoking the user token later switches it off
+   without touching the bot. See the README's access section.
 2. Check `docs/slack-recommended-settings.yaml` for settings outside the manifest.
 3. Install the app and register its **bot credential** in the runtime's secure
    connection as `custom.slack-muse-bot`.

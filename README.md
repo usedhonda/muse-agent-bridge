@@ -156,6 +156,16 @@ change as evidence that existing permissions were reduced. Slack app visibility
 and enabled scopes do not prove runtime access restrictions. Review
 [Slack-side settings](docs/slack-recommended-settings.yaml) too.
 
+Observation is an **opt-in, off by default**. If you want your Muse to also
+read and search Slack as you (history and user lookup, through tooling that
+consumes a user token), install the app from the observer profile,
+[slack-app-manifest.observer.yaml](slack-app-manifest.observer.yaml), instead
+of the default manifest; it adds read-only user scopes that cannot post, and
+its header explains the choice. The bridge itself still uses only the bot
+token either way. To switch observation off later, revoke the user token in
+the Slack app's OAuth settings — observation stops immediately and the
+bridge is unaffected, no reinstall needed.
+
 ## Policy
 
 - **Multi-audience is the design target; the current implementation
