@@ -732,6 +732,193 @@ class QueueTests(unittest.TestCase):
         )
 
 
+class PendingExpiryTests(unittest.TestCase):
+    """Issue #17: the claim-time expiry sweep closes stale
+    unclaimed pendings by class TTL (group conversation expires,
+    owner DMs do not by default) and never touches claimed,
+    sending or replied items."""
+
+    def _seed(self, state):
+        # Ages are evaluated against now=10_000.0 in the tests.
+        queue_core.enqueue(
+            state, platform="telegram", external_id="g-old",
+            chat_id=-100, chat_type="group", text="old", now=9_000.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="g-fresh",
+            chat_id=-100, chat_type="group", text="fresh", now=9_700.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="sg-old",
+            chat_id=-200, chat_type="supergroup", text="old", now=9_000.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="dm-old",
+            chat_id=555, chat_type="private", text="dm", now=1_000.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="untyped",
+            chat_id=-300, text="no chat type", now=1_000.0,
+        )
+        queue_core.enqueue(
+            state, platform="slack", external_id="s-old",
+            chat_id=-100, chat_type="group", text="slack", now=9_000.0,
+        )
+
+    def test_sweep_expires_only_eligible_pendings(self):
+        state = {}
+        self._seed(state)
+        by_id = {i["external_id"]: i for i in state["queue"]}
+        # A dry run reports the eligible items and mutates nothing.
+        would = queue_core.expire_stale_pending(
+            state, platform="telegram", dry_run=True, now=10_000.0
+        )
+        self.assertEqual(
+            {i["external_id"] for i in would}, {"g-old", "sg-old"}
+        )
+        self.assertTrue(
+            all(i["status"] == queue_core.PENDING for i in state["queue"])
+        )
+        expired = queue_core.expire_stale_pending(
+            state, platform="telegram", now=10_000.0
+        )
+        self.assertEqual(
+            {i["external_id"] for i in expired}, {"g-old", "sg-old"}
+        )
+        for external_id in ("g-old", "sg-old"):
+            item = by_id[external_id]
+            self.assertEqual(item["status"], queue_core.DONE)
+            self.assertEqual(item["done_reason"], "expired")
+            self.assertEqual(item["done_at"], 10_000.0)
+            self.assertIsNone(item["claim_token"])
+        # The fresh group item, the old DM (no default TTL), the
+        # untyped item and the other platform's item are untouched.
+        for external_id in ("g-fresh", "dm-old", "untyped", "s-old"):
+            self.assertEqual(by_id[external_id]["status"], queue_core.PENDING)
+            self.assertNotIn("done_reason", by_id[external_id])
+        self.assertEqual(queue_core.counts(state)["done"], 2)
+        # A second sweep finds nothing left to expire.
+        self.assertEqual(
+            queue_core.expire_stale_pending(
+                state, platform="telegram", now=10_001.0
+            ),
+            [],
+        )
+
+    def test_sweep_never_expires_claimed_sending_or_replied(self):
+        state = {}
+        for i, ext in enumerate(("c1", "c2", "c3", "c4")):
+            queue_core.enqueue(
+                state, platform="telegram", external_id=ext,
+                chat_id=-100, chat_type="group", text=ext, now=1_000.0 + i,
+            )
+        # The setup claim disables the sweep (group_pending_ttl=None)
+        # so the protected states can be arranged at all.
+        batch = queue_core.claim_batch(
+            state, platform="telegram", batch_size=4,
+            group_pending_ttl=None, now=2_000.0,
+        )
+        token = batch["claim_token"]
+        by_id = {i["external_id"]: i for i in state["queue"]}
+        self.assertTrue(
+            queue_core.mark_sending(state, "telegram", "c2", token)
+        )
+        self.assertTrue(
+            queue_core.mark_replied(state, "telegram", "c3", 42, token)
+        )
+        self.assertTrue(
+            queue_core.mark_done(state, "telegram", "c4", token)
+        )
+        # A pending item with a recorded reply (legacy or
+        # hand-edited state) is also left for operator
+        # reconciliation, exactly as claim_batch leaves it.
+        queue_core.enqueue(
+            state, platform="telegram", external_id="legacy",
+            chat_id=-100, chat_type="group", text="legacy", now=1_500.0,
+        )
+        legacy = queue_core.find_item(state, "telegram", "legacy")
+        legacy["replied_at"] = 1_600.0
+        # Far past every TTL: nothing in a protected state expires.
+        expired = queue_core.expire_stale_pending(
+            state, platform="telegram", now=10_000_000.0
+        )
+        self.assertEqual(expired, [])
+        self.assertEqual(by_id["c1"]["status"], queue_core.CLAIMED)
+        self.assertEqual(by_id["c2"]["status"], queue_core.SENDING)
+        self.assertEqual(by_id["c3"]["status"], queue_core.CLAIMED)
+        self.assertIsNotNone(by_id["c3"]["replied_at"])
+        self.assertEqual(by_id["c4"]["status"], queue_core.DONE)
+        self.assertNotIn("done_reason", by_id["c4"])
+        self.assertEqual(legacy["status"], queue_core.PENDING)
+
+    def test_claim_batch_sweeps_before_claiming(self):
+        """The live backlog pattern: stale group pendings are
+        closed by the claim itself, and only the fresh item wakes."""
+        state = {}
+        for i in range(3):
+            queue_core.enqueue(
+                state, platform="telegram", external_id=f"stale-{i}",
+                chat_id=-100, chat_type="group", text="stale",
+                now=1_000.0 + i,
+            )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="fresh",
+            chat_id=-100, chat_type="group", text="fresh", now=9_950.0,
+        )
+        batch = queue_core.claim_batch(
+            state, platform="telegram", now=10_000.0
+        )
+        self.assertEqual(
+            [i["external_id"] for i in batch["items"]], ["fresh"]
+        )
+        for item in state["queue"]:
+            if item["external_id"].startswith("stale-"):
+                self.assertEqual(item["status"], queue_core.DONE)
+                self.assertEqual(item["done_reason"], "expired")
+        result = queue_core.counts(state)
+        self.assertEqual(result["done"], 3)
+        self.assertEqual(result["pending"], 0)
+        # Nothing left to claim.
+        self.assertIsNone(
+            queue_core.claim_batch(state, platform="telegram", now=10_001.0)
+        )
+
+    def test_pending_ttl_is_configurable_per_class(self):
+        state = {}
+        queue_core.enqueue(
+            state, platform="telegram", external_id="dm",
+            chat_id=555, chat_type="private", text="dm", now=1_000.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="g",
+            chat_id=-100, chat_type="group", text="g", now=9_800.0,
+        )
+        # Defaults: the DM never expires, and the 200s-old group
+        # item is under the 600s default TTL.
+        self.assertEqual(
+            queue_core.expire_stale_pending(state, now=10_000.0), []
+        )
+        # Opt-in DM expiry plus a shorter group TTL expire both.
+        expired = queue_core.expire_stale_pending(
+            state, group_ttl=60.0, private_ttl=60.0, now=10_000.0
+        )
+        self.assertEqual(
+            {i["external_id"] for i in expired}, {"dm", "g"}
+        )
+        # A None group TTL disables group expiry entirely.
+        state2 = {}
+        queue_core.enqueue(
+            state2, platform="telegram", external_id="g2",
+            chat_id=-100, chat_type="group", text="g", now=1_000.0,
+        )
+        self.assertEqual(
+            queue_core.expire_stale_pending(
+                state2, group_ttl=None, now=10_000.0
+            ),
+            [],
+        )
+
+
 def _claim_worker(state_path: str, worker_id: int, result_dir: str) -> None:
     """Claim batches and finish them until the queue drains.
 

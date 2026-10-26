@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -517,6 +518,92 @@ class SendFenceTests(unittest.TestCase):
         self.assertEqual(
             item["done_evidence"], "history: reply found as message 900"
         )
+
+
+class PurgeExpiredTests(unittest.TestCase):
+    """--purge-expired (Issue #17): the operator form of the
+    pending-expiry sweep — same class TTLs and safety lines as the
+    claim-time sweep, runnable on demand, with a dry run."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "state.json"
+        run_cli(self.path, ["--adopt", str(OWNER)])
+        now = time.time()
+        store = JsonStateStore(self.path)
+        with store.transaction() as state:
+            queue_core.enqueue(
+                state, platform="telegram", external_id="g-old",
+                chat_id=GROUP, chat_type="group", text="old group",
+                now=now - 3600,
+            )
+            queue_core.enqueue(
+                state, platform="telegram", external_id="g-mid",
+                chat_id=GROUP, chat_type="group", text="mid group",
+                now=now - 300,
+            )
+            queue_core.enqueue(
+                state, platform="telegram", external_id="dm-old",
+                chat_id=OWNER, chat_type="private", text="old dm",
+                now=now - 86400,
+            )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def item(self, external_id):
+        state = JsonStateStore(self.path).load()
+        return next(
+            i for i in state["queue"] if i["external_id"] == external_id
+        )
+
+    def test_purge_dry_run_changes_nothing(self):
+        result = run_cli(self.path, ["--purge-expired", "--dry-run"])
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["dry_run"], True)
+        self.assertEqual(result["expired"], 1)
+        self.assertEqual(result["external_ids"], ["g-old"])
+        for external_id in ("g-old", "g-mid", "dm-old"):
+            item = self.item(external_id)
+            self.assertEqual(item["status"], "pending")
+            self.assertNotIn("done_reason", item)
+
+    def test_purge_expires_old_group_items_only(self):
+        result = run_cli(self.path, ["--purge-expired"])
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["dry_run"], False)
+        self.assertEqual(result["expired"], 1)
+        old = self.item("g-old")
+        self.assertEqual(old["status"], "done")
+        self.assertEqual(old["done_reason"], "expired")
+        # The mid-age group item is under the default TTL, and the
+        # day-old owner DM never expires by default.
+        self.assertEqual(self.item("g-mid")["status"], "pending")
+        self.assertEqual(self.item("dm-old")["status"], "pending")
+
+    def test_purge_older_than_overrides_group_ttl(self):
+        result = run_cli(
+            self.path, ["--purge-expired", "--older-than", "60"]
+        )
+        self.assertEqual(result["expired"], 2)
+        self.assertEqual(
+            set(result["external_ids"]), {"g-old", "g-mid"}
+        )
+        # Even an aggressive threshold never touches the owner DM:
+        # --older-than overrides the group class only.
+        self.assertEqual(self.item("dm-old")["status"], "pending")
+
+    def test_purge_rejects_bad_arguments(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = telegram.main(
+                ["--purge-expired", "--older-than", "soon"],
+                fetch=FakeFetch(),
+                path=self.path,
+            )
+        self.assertEqual(rc, 2)
+        self.assertFalse(json.loads(out.getvalue())["ok"])
+        self.assertEqual(self.item("g-old")["status"], "pending")
 
 
 if __name__ == "__main__":

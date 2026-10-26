@@ -33,9 +33,13 @@ Keeps the operational interface the wake hook drives:
                            "config"} when the send command is not
                            configured (item stays claimed), and
                            {"ok": false, "stage": "input"} for empty or
-                           oversized reply text. A destination other
-                           than the chat recorded at intake is refused
-                           without sending.
+                           oversized reply text, and {"ok": false,
+                           "stage": "stale"} when the item is older
+                           than the maximum reply age — the fence then
+                           closes the item as expired without sending,
+                           because the conversation has moved on. A
+                           destination other than the chat recorded
+                           at intake is refused without sending.
   --done ID [TOKEN] [REASON] [EVIDENCE]
                            mark a claimed or sending item done; the
                            optional REASON (one short word, e.g.
@@ -56,6 +60,17 @@ Keeps the operational interface the wake hook drives:
   --send-failed ID TOKEN   return a "sending" item to pending — ONLY
                            when the Bot API definitively rejected the
                            send (the reply provably did not go out)
+  --purge-expired [--older-than SECONDS] [--dry-run]
+                           operator purge: run the pending-expiry
+                           sweep on demand (the same sweep claiming
+                           performs) and print JSON counts plus the
+                           expired items' ids. --older-than overrides
+                           the group TTL for this run; private (owner
+                           DM) items keep their configured TTL —
+                           never, by default — so a purge cannot
+                           silently drop the owner's own asks.
+                           --dry-run reports what would expire and
+                           changes nothing
   --adopt ID   bind a positive owner ID once (main agent/operator only).
                The same ID is idempotent; changing an established owner is
                refused and requires deliberate, offline state migration.
@@ -70,7 +85,12 @@ queue plus this adapter's keys (``offset``, ``owner_id``, ``group_id``,
 ``group_buffer``, ``candidates``, ``candidate_groups``). The state path
 is ``$TELEGRAM_BRIDGE_STATE_PATH`` or ``state.json`` beside this file.
 Batch size and stale TTL can be tuned with ``$TELEGRAM_BRIDGE_BATCH_SIZE``
-and ``$TELEGRAM_BRIDGE_STALE_TTL`` (seconds).
+and ``$TELEGRAM_BRIDGE_STALE_TTL`` (seconds). The pending-expiry sweep
+and the fence's stale guard are tuned with
+``$TELEGRAM_BRIDGE_GROUP_PENDING_TTL`` (default 600),
+``$TELEGRAM_BRIDGE_PRIVATE_PENDING_TTL`` (unset: owner DMs never
+expire) and ``$TELEGRAM_BRIDGE_MAX_REPLY_AGE`` (default 1800);
+a negative value disables the limit it tunes.
 
 The wake payload carries every claimed item under ``"items"`` plus the
 batch ``claim_token``; for compatibility the first item's fields are
@@ -104,6 +124,24 @@ SEND_CMD_ENV = "TELEGRAM_BRIDGE_SEND_CMD"
 #: outcome is classified as unknown (the send may have gone out).
 SEND_TIMEOUT_SECONDS = 30.0
 
+#: Environment variables tuning the pending-expiry sweep (claim-time
+#: and --purge-expired) and the send fence's stale guard, in seconds.
+#: The group TTL defaults to queue_core.DEFAULT_GROUP_PENDING_TTL;
+#: the private TTL is unset (owner DMs never expire) by default; the
+#: maximum reply age defaults to DEFAULT_MAX_REPLY_AGE. A negative
+#: value disables the limit it tunes.
+GROUP_PENDING_TTL_ENV = "TELEGRAM_BRIDGE_GROUP_PENDING_TTL"
+PRIVATE_PENDING_TTL_ENV = "TELEGRAM_BRIDGE_PRIVATE_PENDING_TTL"
+MAX_REPLY_AGE_ENV = "TELEGRAM_BRIDGE_MAX_REPLY_AGE"
+
+#: Default maximum age (seconds since intake) at which the send
+#: fence still sends a queue reply. Past it, the fence refuses with
+#: stage "stale" and closes the item as expired: the conversation
+#: has moved on, so the reply would land off-context. Operator posts
+#: that do not come from the queue never pass through the fence and
+#: are unaffected.
+DEFAULT_MAX_REPLY_AGE = 1800.0
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -117,6 +155,35 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, "") or default)
     except ValueError:
         return default
+
+
+def _env_seconds(name: str, default):
+    """Float seconds from the environment; ``default`` when unset or
+    invalid. A negative value resolves to None — the limit it tunes
+    is disabled."""
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return None if value < 0 else value
+
+
+def _expiry_ttls() -> tuple:
+    """(group_ttl, private_ttl) for the pending-expiry sweep."""
+    return (
+        _env_seconds(
+            GROUP_PENDING_TTL_ENV, queue_core.DEFAULT_GROUP_PENDING_TTL
+        ),
+        _env_seconds(PRIVATE_PENDING_TTL_ENV, None),
+    )
+
+
+def _max_reply_age():
+    """The send fence's maximum reply age, from the environment."""
+    return _env_seconds(MAX_REPLY_AGE_ENV, DEFAULT_MAX_REPLY_AGE)
 
 
 def api(method: str, params: dict, timeout: float = 20.0) -> dict:
@@ -291,11 +358,17 @@ def run_once(store: JsonStateStore, fetch=fetch_updates) -> dict | None:
         raise RuntimeError(f"getUpdates failed: {result.get('description')}")
     batch_size = _env_int("TELEGRAM_BRIDGE_BATCH_SIZE", queue_core.DEFAULT_BATCH_SIZE)
     stale_ttl = float(_env_int("TELEGRAM_BRIDGE_STALE_TTL", int(queue_core.DEFAULT_STALE_TTL)))
+    group_ttl, private_ttl = _expiry_ttls()
     with store.transaction() as state:
         _ensure_adapter_state(state)
         ingest(state, result)
         batch = queue_core.claim_batch(
-            state, platform=PLATFORM, batch_size=batch_size, stale_ttl=stale_ttl
+            state,
+            platform=PLATFORM,
+            batch_size=batch_size,
+            stale_ttl=stale_ttl,
+            group_pending_ttl=group_ttl,
+            private_pending_ttl=private_ttl,
         )
         payload = build_payload(state, batch) if batch else None
     return payload
@@ -337,7 +410,16 @@ def _run_send_command(send_cmd: str, chat_id, text: str):
     return "sent", lines[-1]
 
 
-def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -> dict:
+def send_fenced(
+    store: JsonStateStore,
+    target: int,
+    token,
+    chat_id,
+    text: str,
+    *,
+    max_reply_age: float | None = DEFAULT_MAX_REPLY_AGE,
+    now: float | None = None,
+) -> dict:
     """Send one queue reply under the send fence.
 
     Order is the whole point: configuration is checked first (an
@@ -353,6 +435,15 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
       operator reconciliation; it is never resent automatically.
       Only independently verified non-delivery permits an operator
       to return it to pending with --send-failed.
+    - stale → the item is older than ``max_reply_age`` (seconds
+      since intake; None disables the guard) and has no recorded
+      reply. The fence refuses
+      BEFORE marking "sending" or running the send command, and
+      closes the item as expired (token-checked, same transaction):
+      the conversation has moved on since intake, so the reply
+      would land off-context. If the close itself is refused (bad
+      token, wrong status), the result is a plain fence refusal
+      and nothing changes.
     """
     # Refuse invalid text before reserving the send. Telegram sendMessage
     # accepts 1-4096 characters, and a rejected empty/oversized reply must
@@ -371,6 +462,22 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
         queued_chat_id = item.get("chat_id") if item is not None else None
         if type(queued_chat_id) is not int or str(queued_chat_id) != str(chat_id):
             return {"ok": False, "stage": "fence"}
+        if (
+            max_reply_age is not None
+            and item is not None
+            and item["replied_at"] is None
+            and (time.time() if now is None else now) - item["received_at"]
+            > max_reply_age
+        ):
+            closed = queue_core.mark_done(
+                state,
+                PLATFORM,
+                target,
+                token,
+                reason=queue_core.EXPIRED_REASON,
+                now=now,
+            )
+            return {"ok": False, "stage": "stale" if closed else "fence"}
         fenced = queue_core.mark_sending(state, PLATFORM, target, token)
     if not fenced:
         return {"ok": False, "stage": "fence"}
@@ -427,9 +534,71 @@ def main(argv=None, *, fetch=fetch_updates, path: Path | None = None) -> int:
 
     if args[:1] == ["--send-fenced"] and len(args) == 4:
         result = send_fenced(
-            store, int(args[1]), args[2], args[3], sys.stdin.read()
+            store,
+            int(args[1]),
+            args[2],
+            args[3],
+            sys.stdin.read(),
+            max_reply_age=_max_reply_age(),
         )
         print(json.dumps(result))
+        return 0
+
+    if args[:1] == ["--purge-expired"]:
+        older_than = None
+        dry_run = False
+        rest = args[1:]
+        index = 0
+        valid = True
+        while index < len(rest):
+            if rest[index] == "--dry-run":
+                dry_run = True
+                index += 1
+            elif rest[index] == "--older-than" and index + 1 < len(rest):
+                try:
+                    older_than = float(rest[index + 1])
+                except ValueError:
+                    valid = False
+                    break
+                index += 2
+            else:
+                valid = False
+                break
+        if not valid:
+            print(json.dumps({
+                "ok": False,
+                "error": "usage: --purge-expired "
+                         "[--older-than SECONDS] [--dry-run]",
+            }))
+            return 2
+        group_ttl, private_ttl = _expiry_ttls()
+        if older_than is not None:
+            group_ttl = older_than
+        if dry_run:
+            # A dry run only reads: no transaction, no save.
+            state = _ensure_adapter_state(store.load())
+            expired = queue_core.expire_stale_pending(
+                state,
+                platform=PLATFORM,
+                group_ttl=group_ttl,
+                private_ttl=private_ttl,
+                dry_run=True,
+            )
+        else:
+            with store.transaction() as state:
+                _ensure_adapter_state(state)
+                expired = queue_core.expire_stale_pending(
+                    state,
+                    platform=PLATFORM,
+                    group_ttl=group_ttl,
+                    private_ttl=private_ttl,
+                )
+        print(json.dumps({
+            "ok": True,
+            "dry_run": dry_run,
+            "expired": len(expired),
+            "external_ids": [item["external_id"] for item in expired],
+        }))
         return 0
 
     if args[:1] == ["--replied"] and len(args) in (3, 4):

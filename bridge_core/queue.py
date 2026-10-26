@@ -41,6 +41,15 @@ Claim discipline (the rules that keep wake turns from double-answering):
   not block the queue forever, but a slow turn is never raced by a
   second claim. After a recycle the old batch token no longer matches,
   so the stale turn's late transition calls are all rejected.
+- Unclaimed ``pending`` items are not kept forever either: before any
+  claim, a sweep expires group/supergroup items older than their
+  class TTL (default 600s). An expired item is closed ``done`` with
+  reason "expired" and never woken — a turn answering hours-old room
+  chatter only produces late, off-context replies. Private (owner DM)
+  items have no TTL by default: they carry the principal's own asks,
+  and dropping one silently is worse than a late wake. The sweep
+  never touches claimed, sending or replied items, in any class
+  (see ``expire_stale_pending``).
 - A batch is a single conversation lane: ``claim_batch`` takes items
   of one platform and one chat only (the lane of the oldest pending
   item for the requested platform), so a turn never mixes platforms
@@ -56,6 +65,22 @@ import time
 
 DEFAULT_BATCH_SIZE = 5
 DEFAULT_STALE_TTL = 1800.0
+
+#: Default age (seconds since intake) after which an unclaimed
+#: group/supergroup item is expired by the claim-time sweep instead
+#: of being woken. Group conversation moves on quickly; a reply to
+#: an hours-old room item lands off-context.
+DEFAULT_GROUP_PENDING_TTL = 600.0
+
+#: done_reason recorded when an item is closed for exceeding its
+#: age limit (the claim-time sweep, the operator purge, or the send
+#: fence's stale guard).
+EXPIRED_REASON = "expired"
+
+#: Chat types whose unclaimed items expire under ``group_ttl``.
+#: Private (owner DM) items are deliberately NOT in this set: they
+#: have no default TTL (see ``pending_ttl``).
+GROUP_CHAT_TYPES = ("group", "supergroup")
 
 PENDING = "pending"
 CLAIMED = "claimed"
@@ -149,12 +174,86 @@ def _recycle_stale(state: dict, stale_ttl: float, now: float) -> None:
             item["claim_token"] = None
 
 
+def pending_ttl(
+    item: dict,
+    *,
+    group_ttl: float | None = DEFAULT_GROUP_PENDING_TTL,
+    private_ttl: float | None = None,
+) -> float | None:
+    """The expiry TTL (seconds) for an unclaimed item, or None.
+
+    Group/supergroup conversation items expire under ``group_ttl``
+    (None disables even that). Private items return ``private_ttl``
+    — None (never expire) unless an operator explicitly opted the
+    owner's DMs into expiry. Items with any other (or no) chat type
+    never expire: when the class is unclear, not dropping the item
+    is the safe side.
+    """
+    chat_type = item.get("chat_type")
+    if chat_type in GROUP_CHAT_TYPES:
+        return group_ttl
+    if chat_type == "private":
+        return private_ttl
+    return None
+
+
+def expire_stale_pending(
+    state: dict,
+    *,
+    platform: str | None = None,
+    group_ttl: float | None = DEFAULT_GROUP_PENDING_TTL,
+    private_ttl: float | None = None,
+    dry_run: bool = False,
+    now: float | None = None,
+) -> list:
+    """Close unclaimed pending items older than their class TTL.
+
+    An expired item becomes ``done`` with ``done_reason`` "expired":
+    it is never woken and never replied to, but its record (and the
+    ``counts`` totals) stays in state for audit — nothing vanishes
+    silently.
+
+    Only items still in ``pending`` with no recorded reply are
+    eligible. Claimed, ``sending`` and replied items are NEVER
+    expired, in any class: a replied item's answer already went out,
+    and a ``sending`` item's outcome may be unknown, so expiring
+    either could resurrect it for a duplicate send. A ``pending``
+    item with a recorded reply (legacy or hand-edited state) is
+    likewise left for operator reconciliation, exactly as
+    ``claim_batch`` leaves it unclaimable.
+
+    With ``dry_run`` the eligible items are returned but nothing is
+    mutated. Returns the expired (or, for a dry run, expirable)
+    items, in queue order.
+    """
+    ensure_state(state)
+    now = _now(now)
+    expired = []
+    for item in state["queue"]:
+        if item["status"] != PENDING or item["replied_at"] is not None:
+            continue
+        if platform is not None and item["platform"] != platform:
+            continue
+        ttl = pending_ttl(item, group_ttl=group_ttl, private_ttl=private_ttl)
+        if ttl is None or now - item["received_at"] <= ttl:
+            continue
+        expired.append(item)
+        if not dry_run:
+            item["status"] = DONE
+            item["done_at"] = now
+            item["claim_token"] = None
+            item["done_reason"] = EXPIRED_REASON
+    return expired
+
+
 def claim_batch(
     state: dict,
     *,
     platform: str | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     stale_ttl: float = DEFAULT_STALE_TTL,
+    group_pending_ttl: float | None = DEFAULT_GROUP_PENDING_TTL,
+    private_pending_ttl: float | None = None,
     now: float | None = None,
 ) -> dict | None:
     """Claim up to ``batch_size`` pending items as one batch.
@@ -178,12 +277,28 @@ def claim_batch(
     already went out, so claiming it could only duplicate the
     answer. It is left for operator reconciliation.
 
+    Before selection, unclaimed pending items past their class TTL
+    are expired in the same call (see :func:`expire_stale_pending`),
+    so an item the sweep closes is never claimed here either. The
+    sweep runs BEFORE the stale-claim recycle: an item recycled by
+    this call keeps the pre-existing behavior (it is claimable
+    immediately) and is swept on a later call if still unclaimed —
+    while the send fence's own stale guard still refuses to send
+    for it once it is too old.
+
     Returns ``{"claim_token": str, "items": [item, ...]}`` or
     ``None`` when there is nothing eligible to claim or every
     eligible item's lane still has a batch in flight.
     """
     ensure_state(state)
     now = _now(now)
+    expire_stale_pending(
+        state,
+        platform=platform,
+        group_ttl=group_pending_ttl,
+        private_ttl=private_pending_ttl,
+        now=now,
+    )
     _recycle_stale(state, stale_ttl, now)
     pending = [
         item
