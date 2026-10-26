@@ -160,6 +160,10 @@ privately; do not publish message bodies, IDs or credentials in diagnostics.
 ## Unknown outcomes and interrupted turns
 
 `unknown` requires operator reconciliation against independent delivery evidence.
+If the sender prints a message ID but exits nonzero, the bridge returns `unknown`
+without retaining that ID, so the printed ID alone proves neither success nor
+failure and must not trigger automatic resend or completion; inspect Telegram
+independently to reconcile the outcome.
 Do not release, reset state or call `--send-failed` merely because the sender
 exited nonzero. A `sending` item retains its lane reservation beyond claim TTL;
 automatic retry could duplicate a remotely accepted message.
