@@ -14,6 +14,12 @@ state/
 *.log
 
 # Tooling noise
+.venv/
 __pycache__/
 node_modules/
 .DS_Store
+
+# bridge state never lives in the repo (adapter default path guard)
+state.json
+state.json.good
+state.json.lock
