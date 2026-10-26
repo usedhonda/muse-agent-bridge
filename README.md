@@ -7,8 +7,8 @@ runtime to claim turns and post replies. (This repository was formerly named
 muse-slack-bridge.)
 
 **New here?** Start with [Start here: your first bridge reply](docs/start-here.md).
-It walks from zero to a working Telegram bridge — the shortest path — and then
-points to the Slack setup.
+It explains the Telegram runtime prerequisites and reply lifecycle, then points
+to the Slack setup. A host-specific dispatcher and verified sender are required.
 
 **This repository is not a turnkey model agent.** You must supply the model/runtime,
 its wake hook, and secure credential injection. Starting an intake process alone
@@ -32,11 +32,14 @@ the design contracts — manifest, scopes, token model, mention gating,
 thread sessions — carry over; the runtime does not.
 
 Status: the Slack package and the platform-neutral `bridge_core` (with its
-Telegram adapter) are implemented and offline-tested. The Telegram adapter runs
-live in the reference deployment (owner DM plus a private agent room); the Slack
-side serves the same deployment. Live behavior is deployment-specific — the
-offline tests are the shared contract. See [HANDOFF.md](HANDOFF.md) for the
-early history.
+Telegram adapter) are implemented and covered by offline tests. Those checks
+exercise local contracts with fake platform responses; they do not establish
+live service or same-candidate acceptance on both platforms. No current
+commit-specific two-platform live acceptance is established here. Historical
+deployment notes in [HANDOFF.md](HANDOFF.md) are not current release evidence.
+Before claiming a candidate serves both platforms, independently verify that
+exact candidate's runtime dispatch, authorized intake and one delivered reply
+on each intended platform. The test evidence described here is offline only.
 
 ## Quick start
 

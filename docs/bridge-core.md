@@ -233,10 +233,10 @@ other bots' alike — are queued with the rolling context buffer.
 ## Setup from scratch (Telegram deployment)
 
 1. **Create the bot** in BotFather and keep the token for step 2 only.
-   - To receive other bots' posts in a group, enable **Bot-to-Bot
-     Communication Mode** for the bot in BotFather.
-   - Add the bot to the group and promote it to admin (or disable
-     privacy mode), so it receives all group messages.
+   - Start with owner DMs. Before any group use, review the broader
+     [group ingestion boundary](start-here.md#optional-groups-a-broader-ingestion-boundary).
+     Admin promotion, disabling privacy mode and enabling bot-to-bot
+     delivery are deliberate audience expansions, not default setup steps.
 2. **Register the credential** in Muse's secure connection as
    provider `custom.telegram-muse-bot` (API key placed in the URL path
    segment `/bot{}` on `api.telegram.org`). The adapter never sees the
