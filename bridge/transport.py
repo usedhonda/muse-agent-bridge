@@ -30,6 +30,15 @@ def open_connection_url(app_token: str) -> str:
     return result["url"]
 
 
+def _socket_call(call, *args, **kwargs):
+    import websocket
+    try:
+        return call(*args, **kwargs)
+    except websocket.WebSocketException:
+        # Exception details can contain transport URLs/headers; never echo them.
+        raise ConnectionError("Socket Mode connection interrupted") from None
+
+
 class SocketModeTransport:
     def __init__(self, app_token: str):
         self._app_token = app_token
@@ -53,18 +62,25 @@ class SocketModeTransport:
             if parsed.username:
                 options["http_proxy_auth"] = (parsed.username, parsed.password or "")
             options["proxy_type"] = "http"
-        self._ws = websocket.create_connection(
+        self._ws = _socket_call(websocket.create_connection,
             open_connection_url(self._app_token), **options
         )
 
     def receive(self) -> dict:
-        raw = self._ws.recv()
-        return json.loads(raw)
+        raw = _socket_call(self._ws.recv)
+        if not raw:
+            raise ConnectionError("Socket Mode connection closed")
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            raise ConnectionError("invalid Socket Mode envelope") from None
 
     def send_ack(self, envelope_id: str) -> None:
-        self._ws.send(json.dumps({"envelope_id": envelope_id}))
+        _socket_call(self._ws.send, json.dumps({"envelope_id": envelope_id}))
 
     def close(self) -> None:
         if self._ws is not None:
-            self._ws.close()
-            self._ws = None
+            try:
+                _socket_call(self._ws.close)
+            finally:
+                self._ws = None
