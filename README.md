@@ -176,6 +176,17 @@ content belong here.** Local configuration and state belong in `.local/`
 (gitignored); credentials live only in your approved secure connection or
 secret injector.
 
+**Telegram state security:** place `TELEGRAM_BRIDGE_STATE_PATH` in a private,
+persistent directory outside the checkout. Newly created state directories
+are mode 0700 and the queue/`.good` snapshots are written mode 0600, even
+under a permissive process umask. For existing deployments, inspect the
+directory, old snapshots, backups and retained temporary files for previously
+broad permissions; the fix cannot retroactively protect copied data.
+The Telegram `--adopt` owner binding is one-time: the same positive user ID
+is idempotent, while changing it via another `--adopt` is refused. Planned
+owner handover requires a stopped runtime and audited state migration rather
+than overwriting the identity in a live turn.
+
 ## Further reading
 
 - [Start here: your first bridge reply](docs/start-here.md) — the beginner path, Telegram first
