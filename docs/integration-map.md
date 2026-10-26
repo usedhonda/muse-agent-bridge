@@ -13,6 +13,12 @@ packages: `bridge/` still runs its own store and queue, and
 implementations overlap, where their semantics agree or differ, and the
 order proposed for actually unifying them.
 
+**Provenance:** locally, this branch is a git merge — the merge commit
+has both lines as parents. The GitHub remote branch of the same name is
+a content-identical union replica of that local merge (the same file
+tree, uploaded file by file) with a different commit structure and
+ancestry; it is not the local merge commit itself.
+
 ## Overlap 1: state storage
 
 | | `bridge/store.py` — `EventStore` | `bridge_core/store.py` — `JsonStateStore` |
@@ -32,7 +38,7 @@ engines side by side (one per platform), with incompatible formats.
 | | `bridge/worker.py` — `Worker` (Slack) | `bridge_core/queue.py` (core) |
 |---|---|---|
 | Claim unit | One event per claim, inserted into the SQLite `jobs` table | A batch of up to 5 items from one conversation lane, in the JSON state |
-| Lane key | `(scope, audience_id, channel, conversation_ts)` — one active job per conversation; later events wait | `(platform, chat_id)` — one batch in flight per lane; other lanes stay claimable |
+| Lane key | `(scope, audience_id, channel, conversation_ts)` — one active job per conversation; later events wait | `(platform, chat_id)` — one batch in flight per lane. Lane selection skips busy lanes, so a free lane stays claimable even when the oldest pending item sits in a busy lane; a lane is blocked only by its own in-flight batch |
 | Claim credential | The claim row itself plus a digest of record + `claimed_at`; context refresh and reply verify the digest is unchanged | One random token per batch; every transition (`mark_sending`, `mark_replied`, `mark_done`, `release`, `mark_send_failed`) requires the matching token |
 | TTL | `CLAIM_TTL_SECONDS = 900` is **diagnostic only**. A claim is never reclaimed by age; `status` reports `stale_claimed` and an operator must `resume`, `release` (confirmed-not-started only), or `reconcile` deliberately | `DEFAULT_STALE_TTL = 1800` **does** recycle: an unreplied `claimed` item older than the TTL returns to pending and its old token stops matching, so a stale turn's late calls are rejected |
 | Send discipline | `reply` first persists status `sending` (with the reply text), posts outside the locks, then marks `done`. A fresh (60 s) context receipt from an exact-claim refresh is required before posting. If the outcome is uncertain the job stays `sending` until an operator reconciles it (`--sent-ts` / `--confirmed-not-sent`) | The adapter's send fence persists `mark_sending` before the platform call and records the outcome (`mark_replied` / `mark_send_failed` on definitive rejection). `sending` items are never recycled; closing one without a reply record requires reconciliation `evidence` |
@@ -41,8 +47,15 @@ engines side by side (one per platform), with incompatible formats.
 The shared philosophy: an uncertain send outcome is an operator
 decision, never an automatic retry. The sharpest real difference is
 TTL semantics — Slack never auto-recycles a claim, the core does
-(safely, via token invalidation). Treat this as a per-platform policy
-to be made explicit, not as a bug on either side.
+recycle. The core's recycle is guarded by token invalidation: every
+state transition in `bridge_core` checks the claim token, and the send
+fence persists `sending` before the platform call, so a stale turn's
+late transition calls are rejected. That guarantee is narrow in
+scope — it covers only the token-checked state transitions and the
+send fence inside `bridge_core`. It does not by itself stop an old
+model executor from running, or prevent double execution of external
+operations outside those transitions. Treat the TTL difference as a
+per-platform policy to be made explicit, not as a bug on either side.
 
 ## Overlap 3: intake dedupe
 

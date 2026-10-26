@@ -58,14 +58,6 @@ subscribes to `message.im` and `message.groups`, with bot scopes for DM/private
 channel reads and replies. Receipt reactions require adding `reactions:write`
 and changing local `ackReaction` together.
 
-## Bridge core and the Telegram adapter
-
-The repository also carries `bridge_core/` — a platform-neutral intake
-core (locked atomic state, dedupe, batch-claim discipline) shared by
-platform adapters, with a working Telegram adapter on top of it. See
-[docs/bridge-core.md](docs/bridge-core.md) for the architecture, the
-guarantees the core makes, setup, migration, and rollback.
-
 Choose one intake profile:
 
 - **Socket Mode:** after injecting both tokens, run
@@ -95,6 +87,15 @@ durable state. For live acceptance, send a harmless owner DM and verify one runt
 turn and a delivered reply, then verify an unauthorized sender leaves no queue
 record, reaction or reply. Check `pending` for unfinished jobs; recover interrupted
 turns deliberately before retrying external actions.
+
+## Bridge core and the Telegram adapter
+
+The repository also carries `bridge_core/` — a platform-neutral intake
+core (locked atomic state, dedupe, batch-claim discipline) shared by
+platform adapters, with a working Telegram adapter on top of it. See
+[docs/bridge-core.md](docs/bridge-core.md) for the architecture, the
+guarantees the core makes, setup, migration, and rollback.
+
 
 ## How a turn works
 
@@ -138,12 +139,17 @@ behavior. Review [Slack-side settings](docs/slack-recommended-settings.yaml) too
 
 ## Policy
 
-- **Multi-audience capable, locked down by configuration.** The bridge can
-  serve multiple audiences under the governance rules below; who it serves
-  is local config, not code. The first deployment enables exactly one
-  audience — the owner — with everyone else dropped silently at the
-  listener, and uses Slack-side settings to stay invisible to others.
-  See [docs/design.md](docs/design.md).
+- **Multi-audience is the design target; the current implementation
+  serves the owner only.** The governance rules below describe the
+  design the bridge is built towards: multiple audiences served under
+  scope-tagged governance. Today's worker does not do that yet — it
+  restricts service to the `owner` audience in code, and records from
+  any other audience are refused, not merely left unconfigured. The
+  first deployment enables exactly one audience — the owner — with
+  everyone else dropped silently at the listener, and uses Slack-side
+  settings to stay invisible to others. Opening further audiences is
+  the gated M4 work described below, not a config change against the
+  current worker. See [docs/design.md](docs/design.md).
 - **Information governance is built in from the start**, so the bridge can be
   opened to guests later without redesigning: everything the agent knows is
   scope-tagged (`owner` by default), guest conversations are served only

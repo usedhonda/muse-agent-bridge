@@ -160,15 +160,18 @@ def claim_batch(
     """Claim up to ``batch_size`` pending items as one batch.
 
     The batch is a single conversation lane: when ``platform`` is
-    given, only that platform's items are eligible, and the batch
-    holds only items of the (platform, chat_id) lane of the oldest
-    eligible pending item. Without ``platform``, the oldest pending
-    item overall defines the lane.
+    given, only that platform's items are eligible. Eligible items
+    are considered in received order, and the batch takes the lane
+    of the FIRST eligible item whose (platform, chat_id) lane has
+    nothing in flight; up to ``batch_size`` items of that lane are
+    claimed, in received order.
 
-    The in-flight guard is scoped to that lane: the claim returns
-    ``None`` only when an item of the SAME (platform, chat_id) lane
-    is ``claimed`` or ``sending`` (and not recycled as stale). A
-    batch in flight in one conversation never blocks the others.
+    The in-flight guard is scoped per lane: a lane is blocked only
+    by its OWN in-flight batch (an item ``claimed`` or ``sending``
+    in the same lane, not recycled as stale). Busy lanes are
+    skipped during selection instead of blocking the whole claim,
+    so a newer item in a free lane is claimed even when the oldest
+    pending item sits in a busy lane.
 
     Items with a recorded reply (``replied_at`` set) are never
     eligible, even if one somehow sits in ``pending``: its reply
@@ -176,8 +179,8 @@ def claim_batch(
     answer. It is left for operator reconciliation.
 
     Returns ``{"claim_token": str, "items": [item, ...]}`` or
-    ``None`` when there is nothing eligible to claim or the selected
-    lane still has a batch in flight.
+    ``None`` when there is nothing eligible to claim or every
+    eligible item's lane still has a batch in flight.
     """
     ensure_state(state)
     now = _now(now)
@@ -192,12 +195,18 @@ def claim_batch(
     pending.sort(key=lambda item: item["received_at"])
     if not pending:
         return None
-    lane = (pending[0]["platform"], pending[0]["chat_id"])
-    if any(
-        item["status"] in IN_FLIGHT
-        and (item["platform"], item["chat_id"]) == lane
+    busy_lanes = {
+        (item["platform"], item["chat_id"])
         for item in state["queue"]
-    ):
+        if item["status"] in IN_FLIGHT
+    }
+    lane = None
+    for item in pending:
+        candidate = (item["platform"], item["chat_id"])
+        if candidate not in busy_lanes:
+            lane = candidate
+            break
+    if lane is None:
         return None
     batch = [
         item

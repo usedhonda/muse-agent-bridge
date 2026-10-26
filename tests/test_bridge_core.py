@@ -625,6 +625,49 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(by_id["a1"]["status"], queue_core.CLAIMED)
         self.assertEqual(by_id["b1"]["status"], queue_core.CLAIMED)
 
+    def test_f3_busy_oldest_lane_does_not_block_free_lane(self):
+        """F3 (head-of-line): lane selection skips busy lanes. With
+        lane A in flight, an OLDER pending item in A must not block
+        a NEWER pending item in free lane B — B is claimed. When
+        every pending item's lane is busy, the claim is None."""
+        state = {}
+        queue_core.enqueue(
+            state, platform="telegram", external_id="a1", chat_id=-100,
+            chat_type="group", text="a1", now=10.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="a2", chat_id=-100,
+            chat_type="group", text="a2", now=11.0,
+        )
+        queue_core.enqueue(
+            state, platform="telegram", external_id="b1", chat_id=555,
+            chat_type="private", text="b1", now=12.0,
+        )
+        # Claim only a1 so lane A is in flight while a2 (older) and
+        # b1 (newer) both stay pending.
+        first = queue_core.claim_batch(
+            state, platform="telegram", batch_size=1, now=100.0
+        )
+        self.assertEqual(
+            [i["external_id"] for i in first["items"]], ["a1"]
+        )
+        # The oldest pending item (a2) sits in busy lane A; the
+        # claim skips that lane and takes free lane B instead of
+        # returning None.
+        second = queue_core.claim_batch(
+            state, platform="telegram", batch_size=5, now=101.0
+        )
+        self.assertEqual(
+            [i["external_id"] for i in second["items"]], ["b1"]
+        )
+        a2 = queue_core.find_item(state, "telegram", "a2")
+        self.assertEqual(a2["status"], queue_core.PENDING)
+        # Only a2 is left pending and its lane is busy: no claim.
+        self.assertIsNone(
+            queue_core.claim_batch(state, platform="telegram", now=102.0)
+        )
+        self.assertEqual(a2["status"], queue_core.PENDING)
+
     def test_p5_claim_batch_takes_one_lane_for_requested_platform(self):
         """P5: with a mixed-platform, mixed-chat backlog, a claim
         for one platform takes only the (platform, chat) lane of
