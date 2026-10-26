@@ -350,24 +350,84 @@ class SendFenceTests(unittest.TestCase):
         self.assertEqual(item["reply_message_id"], "4242")
         self.assertIsNotNone(item["replied_at"])
 
-    def test_fence_definitive_failure_returns_item_to_pending(self):
-        """A nonzero exit is a definitive failure: the item returns
-        to pending (mark_send_failed semantics) and a later poll can
-        claim it again."""
+    def assert_unknown_reservation(self, cmd, token):
+        """Unknown delivery holds its token and lane beyond TTL, without retry."""
+        item = self.item(1)
+        self.assertEqual(item["status"], "sending")
+        self.assertEqual(item["claim_token"], token)
+        self.assertIsNotNone(item["sending_at"])
+        store = JsonStateStore(self.path)
+        with store.transaction() as state:
+            item = next(i for i in state["queue"] if i["external_id"] == "1")
+            item["claimed_at"] = 1.0
+            item["sending_at"] = 1.0
+        fetch = FakeFetch([msg_update(2, OWNER, "private", OWNER, "another")])
+        self.assertIsNone(run_cli(self.path, [], fetch=fetch))
+        self.assertEqual(self.item(1)["status"], "sending")
+        self.assertEqual(self.item(1)["claim_token"], token)
+        self.assertEqual(self.item(2)["status"], "pending")
+        self.assertEqual(run_cli(self.path, ["--release", "1", token]), {"ok": False})
+        self.assertEqual(run_cli(self.path, ["--done", "1", token, "cancelled"]), {"ok": False})
+        self.assertEqual(self.fenced(cmd, 1, token), {"ok": False, "stage": "fence"})
+        self.assertEqual(self.call_count(), 1)
+
+    def test_fence_nonzero_exit_is_unknown(self):
+        """An arbitrary nonzero exit does not establish non-delivery."""
         token = self.claim_dm()
         cmd = self.write_send_cmd("sys.exit(3)\n")
         result = self.fenced(cmd, 1, token)
-        self.assertEqual(
-            result,
-            {"ok": False, "stage": "send", "returned_to_pending": True},
+        self.assertEqual(result, {"ok": False, "stage": "unknown"})
+        self.assert_unknown_reservation(cmd, token)
+
+    def accepted_then_failed(self, failure):
+        token = self.claim_dm()
+        accepted = self.dir / "fake-remote-acceptance"
+        cmd = self.write_send_cmd(
+            "from pathlib import Path\n"
+            f"Path({str(accepted)!r}).write_text('accepted')\n" + failure
         )
-        self.assertEqual(self.call_count(), 1)
+        self.assertEqual(self.fenced(cmd, 1, token), {"ok": False, "stage": "unknown"})
+        self.assertEqual(accepted.read_text(), "accepted")
+        self.assert_unknown_reservation(cmd, token)
+
+    def test_fence_accepted_then_crashed(self):
+        self.accepted_then_failed("raise RuntimeError('synthetic post-send crash')\n")
+
+    def test_fence_accepted_then_response_lost(self):
+        self.accepted_then_failed("raise ConnectionError('synthetic lost response')\n")
+
+    def test_fence_accepted_then_signal(self):
+        self.accepted_then_failed("import os, signal\nos.kill(os.getpid(), signal.SIGTERM)\n")
+
+    def test_fence_message_id_then_nonzero_is_unknown(self):
+        self.accepted_then_failed("print('4242', flush=True)\nsys.exit(1)\n")
+
+    def test_fence_accepted_then_response_missing(self):
+        self.accepted_then_failed("")
+
+    def test_fence_accepted_then_undecodable_response(self):
+        self.accepted_then_failed("sys.stdout.buffer.write(b'\\xff')\n")
+
+    def test_verified_no_send_requires_explicit_operator_transition(self):
+        """No sender exit code authorizes retry, even a pre-send failure.
+
+        Here the fixture verifiably stops before sending. Only the separate
+        token-checked operator transition may make it retryable.
+        """
+        token = self.claim_dm()
+        cmd = self.write_send_cmd("sys.exit(3)\n")
+        self.assertEqual(self.fenced(cmd, 1, token), {"ok": False, "stage": "unknown"})
+        self.assertEqual(run_cli(self.path, ["--send-failed", "1", "wrong"]), {"ok": False})
+        self.assertEqual(self.item(1)["status"], "sending")
+        self.assertEqual(run_cli(self.path, ["--send-failed", "1", token]), {"ok": True})
         item = self.item(1)
         self.assertEqual(item["status"], "pending")
         self.assertIsNone(item["claim_token"])
         self.assertIsNone(item["sending_at"])
         payload = run_cli(self.path, [], fetch=FakeFetch())
         self.assertEqual(payload["update_id"], 1)
+        self.assertNotEqual(payload["claim_token"], token)
+        self.assertEqual(self.call_count(), 1)
 
     def test_fence_ambiguous_outcome_leaves_sending_and_never_recycles(self):
         """Exit 0 without a message id is ambiguous: the item stays

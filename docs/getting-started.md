@@ -29,8 +29,10 @@ is live. For a generic host with securely injected tokens, use the
 
 Do not paste credential values into Slack, configuration examples, source,
 service units, or diagnostic output. The bridge posts with its bot identity,
-not as the owner. Granted user observation scopes do not mean the bridge has
-implemented those observation features.
+not as the owner. The default manifest now asks for bot scopes only.
+The bridge does not implement user-token-based observation. If adapting an
+existing installed Slack app, check for previously granted user scopes separately:
+removing scopes from the manifest alone does not revoke existing tokens.
 
 ## 3. Prepare a checkout and local configuration
 

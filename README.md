@@ -7,8 +7,8 @@ runtime to claim turns and post replies. (This repository was formerly named
 muse-slack-bridge.)
 
 **New here?** Start with [Start here: your first bridge reply](docs/start-here.md).
-It walks from zero to a working Telegram bridge — the shortest path — and then
-points to the Slack setup.
+It explains the Telegram runtime prerequisites and reply lifecycle, then points
+to the Slack setup. A host-specific dispatcher and verified sender are required.
 
 **This repository is not a turnkey model agent.** You must supply the model/runtime,
 its wake hook, and secure credential injection. Starting an intake process alone
@@ -32,11 +32,14 @@ the design contracts — manifest, scopes, token model, mention gating,
 thread sessions — carry over; the runtime does not.
 
 Status: the Slack package and the platform-neutral `bridge_core` (with its
-Telegram adapter) are implemented and offline-tested. The Telegram adapter runs
-live in the reference deployment (owner DM plus a private agent room); the Slack
-side serves the same deployment. Live behavior is deployment-specific — the
-offline tests are the shared contract. See [HANDOFF.md](HANDOFF.md) for the
-early history.
+Telegram adapter) are implemented and covered by offline tests. Those checks
+exercise local contracts with fake platform responses; they do not establish
+live service or same-candidate acceptance on both platforms. No current
+commit-specific two-platform live acceptance is established here. Historical
+deployment notes in [HANDOFF.md](HANDOFF.md) are not current release evidence.
+Before claiming a candidate serves both platforms, independently verify that
+exact candidate's runtime dispatch, authorized intake and one delivered reply
+on each intended platform. The test evidence described here is offline only.
 
 ## Quick start
 
@@ -143,10 +146,15 @@ ID and scope are both `owner`; guest access remains gated on the design's M4 wor
 Runtime behavior must also enforce the context and authorization policies described
 in [the design](docs/design.md) and the worker's conversation policy.
 
-The manifest includes read-only user scopes for a broader observation profile,
-but this bridge uses the bot token and does not implement that observation feature.
-Slack app visibility and enabled scopes do not prove access restrictions or runtime
-behavior. Review [Slack-side settings](docs/slack-recommended-settings.yaml) too.
+The default manifest deliberately requests **bot scopes only**. The bridge does
+not implement workspace-wide user observation, so there is no reason for a new
+installation to grant a user token or the broad user read scopes of an unrelated
+profile. If upgrading an already-installed Slack app, **removing scopes from a
+manifest does not revoke existing token grants**: review the installation and
+re-authorize or revoke the old user token as appropriate. Do not treat a source
+change as evidence that existing permissions were reduced. Slack app visibility
+and enabled scopes do not prove runtime access restrictions. Review
+[Slack-side settings](docs/slack-recommended-settings.yaml) too.
 
 ## Policy
 
@@ -175,6 +183,17 @@ This public repository contains code, example configuration, and documentation.
 content belong here.** Local configuration and state belong in `.local/`
 (gitignored); credentials live only in your approved secure connection or
 secret injector.
+
+**Telegram state security:** place `TELEGRAM_BRIDGE_STATE_PATH` in a private,
+persistent directory outside the checkout. Newly created state directories
+are mode 0700 and the queue/`.good` snapshots are written mode 0600, even
+under a permissive process umask. For existing deployments, inspect the
+directory, old snapshots, backups and retained temporary files for previously
+broad permissions; the fix cannot retroactively protect copied data.
+The Telegram `--adopt` owner binding is one-time: the same positive user ID
+is idempotent, while changing it via another `--adopt` is refused. Planned
+owner handover requires a stopped runtime and audited state migration rather
+than overwriting the identity in a live turn.
 
 ## Further reading
 

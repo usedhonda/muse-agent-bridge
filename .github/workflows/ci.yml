@@ -1,0 +1,31 @@
+name: Offline tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install declared requirements
+        run: python -m pip install -r requirements.txt
+      - name: Compile all bridge modules and tests
+        run: python -m compileall -q bridge bridge_core tests
+      - name: Focused handoff regression
+        run: python -m unittest discover -s tests -p test_context_handoff.py -v
+      - name: Run credential-free regression suite
+        run: python -m unittest discover -s tests -q

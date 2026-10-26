@@ -113,10 +113,9 @@ The adapter is driven by a polling wake hook, not a daemon:
    it answers, the turn sends the reply through `--send-fenced`,
    which marks the item `sending` and performs the send under the
    fence (see CLI below), then records the reply with `--replied`
-   and closes the item with `--done`. If the send definitively
-   fails, the fence itself returns the item to pending so it can be
-   claimed again later; if the send outcome is ambiguous (or the
-   turn dies mid-send), the item stays in `sending` for an operator
+   and closes the item with `--done`. If the send outcome is ambiguous
+   (including any nonzero sender exit, or the turn dying mid-send),
+   the item stays in `sending` for an operator
    to reconcile — it is never resent automatically. Items closed
    without a reply only need `--done`; passing a short reason word
    as an extra `--done` argument stores it as the item's
@@ -158,13 +157,16 @@ and sends) → `--replied` → `--done`.
   (`TELEGRAM_BRIDGE_SEND_CMD`) exactly once:
   - exit 0 with a message id → `{"ok": true, "message_id": ...}`;
     the item stays in `sending` for `--replied` / `--done`.
-  - nonzero exit (definitive failure) → the item returns to pending
-    and it prints `{"ok": false, "stage": "send",
-    "returned_to_pending": true}`.
-  - timeout, unstartable command, or exit 0 without a message id
+  - nonzero exit (including signals), timeout, unstartable command,
+    undecodable output, or exit 0 without a message id
     (ambiguous) → the item stays in `sending` (send-unknown) and it
     prints `{"ok": false, "stage": "unknown"}`; it is never resent
     automatically.
+    Remote acceptance can precede a lost response, exception or signal;
+    neither an exit code nor error text proves non-delivery. The sender
+    contract has no automatic retryable failure result. Only independently
+    verified non-delivery permits the separate, token-checked operator
+    `--send-failed` transition.
   - send command not configured → `{"ok": false, "stage":
     "config"}` and the item stays claimed (the configuration check
     happens before the fence marks anything).
@@ -231,10 +233,10 @@ other bots' alike — are queued with the rolling context buffer.
 ## Setup from scratch (Telegram deployment)
 
 1. **Create the bot** in BotFather and keep the token for step 2 only.
-   - To receive other bots' posts in a group, enable **Bot-to-Bot
-     Communication Mode** for the bot in BotFather.
-   - Add the bot to the group and promote it to admin (or disable
-     privacy mode), so it receives all group messages.
+   - Start with owner DMs. Before any group use, review the broader
+     [group ingestion boundary](start-here.md#optional-groups-a-broader-ingestion-boundary).
+     Admin promotion, disabling privacy mode and enabling bot-to-bot
+     delivery are deliberate audience expansions, not default setup steps.
 2. **Register the credential** in Muse's secure connection as
    provider `custom.telegram-muse-bot` (API key placed in the URL path
    segment `/bot{}` on `api.telegram.org`). The adapter never sees the
@@ -295,9 +297,12 @@ bridge-core tests prove:
   requires the evidence argument; and the send fence driven with a
   fake send executable (fence refusals never invoke it; the happy
   path marks `sending`, sends exactly once and returns the message
-  id; a definitive failure returns the item to pending; ambiguous
-  outcomes — no message id, unstartable command, timeout — leave
-  it in `sending`, unrecycled and never resent; a missing send
+  id; nonzero exits, acceptance followed by crash, response loss,
+  signal, missing/undecodable output, unstartable command and timeout
+  retain the `sending` reservation; unknown sends remain unrecycled
+  beyond TTL, block their lane and refuse release, cancellation without
+  evidence and repeated sends; verified non-delivery can still be
+  returned to pending through token-checked `--send-failed`; a missing send
   command leaves the item claimed).
 
 ## Migration from the legacy poll.py
