@@ -134,7 +134,7 @@ Run from the repository root (or with the repository on `PYTHONPATH`):
 
 ```sh
 python3 -m bridge_core.telegram                      # poll once; print wake payload or nothing
-python3 -m bridge_core.telegram --send-fenced <update id> <claim token> <chat id> [--allow-stale]   # reply text on stdin
+python3 -m bridge_core.telegram --send-fenced <update id> <claim token> <chat id>   # reply text on stdin
 python3 -m bridge_core.telegram --sending <update id> <claim token>
 python3 -m bridge_core.telegram --done <update id> <claim token> [reason] [evidence]
 python3 -m bridge_core.telegram --release <update id> <claim token>
@@ -174,14 +174,10 @@ and sends) → `--replied` → `--done`.
   - the item is older than the maximum reply age
     (`TELEGRAM_BRIDGE_MAX_REPLY_AGE`) → `{"ok": false, "stage":
     "stale"}` and the item stays claimed, unclosed: the fence
-    refuses the send but never closes claimed work. The supported
-    way forward is the operator reassessment path below — never a
-    re-claim, which cannot change the item's intake time.
-  - `--allow-stale` (operator only; the wake flow never passes it)
-    lets one send proceed past the age guard after the operator
-    has reassessed the item. The claim token, the destination
-    binding and every other fence check still apply, and the item
-    records `stale_override: true` for audit.
+    refuses the send but never closes claimed work or changes its
+    claim token. There is no API or CLI override for this refusal.
+    The operator reassessment path below handles the retained work;
+    re-claiming cannot change the item's intake time.
 - `--sending`: mark the item as mid-send *before* a manual Bot API
   call, so a crash leaves it in `sending` (never auto-resent)
   instead of recyclable. This manual step remains for operator use;
@@ -220,10 +216,19 @@ never expired, and neither is an item that was ever claimed
 (`ever_claimed` survives the stale-claim recycle).
 
 **Classification decides eligibility, not chat type.** At intake
-the adapter stores an `item_class` on each record. Only an item
-positively identified as ordinary conversation may expire; any
-protection signal stores it as a protected `request` instead:
+the adapter stores an `item_class` on each record. The default is
+protected `request` (`CLASS_REQUEST`), including unknown or ambiguous
+text. Only a positive match against the exact standalone greeting
+allowlist may become `conversation` (`CLASS_CONVERSATION`) and expire:
+`hello`, `hi`, `good morning`, `good evening`, `こんにちは`, `おはよう`,
+`おはようございます`, or `こんばんは`. Matching strips surrounding
+whitespace and applies case folding; it does not strip punctuation.
+A greeting embedded in a longer message does not qualify; neither does
+the absence of request keywords. Any protection signal keeps the item
+a protected `request` even when its text matches an allowlisted greeting:
 
+- the same Telegram chat has unfinished protected or unknown queue
+  work, or an unfinished item that was ever claimed (`has_active_work`);
 - the sender is the owner;
 - the text is a bot command (starts with `/`);
 - the message is a reply to an earlier message (a follow-up,
@@ -254,18 +259,15 @@ claimed under its token. Re-claiming cannot help: the age guard
 measures from the immutable intake time, so a fresh claim hits
 the same refusal. The operator's path is:
 
-1. Re-read the item and the current state of the room: is the
-   reply still wanted, in this form, now?
-2. If not, close the item: `--done <update id> <claim token>
-   <reason>` (e.g. `superseded`).
-3. If yes, send deliberately with the override:
-   `--send-fenced <update id> <claim token> <chat id>
-   --allow-stale`, then `--replied` and `--done` as usual. The
-   item records `stale_override: true`, so the audit trail shows
-   the send was a considered operator decision, not a fence
-   bypass. The wake flow never passes `--allow-stale`; a woken
-   turn that hits `stage: "stale"` leaves the item for the
-   operator.
+1. Re-read the item and the current state of the room to determine
+   whether it is superseded or still needs attention.
+2. If it no longer needs attention, explicitly close the retained
+   claim with `--done <update id> <claim token> <reason>` (for example,
+   `superseded`).
+3. If it still needs attention, leave it claimed for operator handling.
+   The fenced send remains refused; neither the API nor the CLI exposes
+   a stale-send override. A woken turn that hits `stage: "stale"`
+   likewise leaves the item and its claim token intact for reassessment.
 
 ### Environment variables
 
@@ -381,12 +383,15 @@ bridge-core tests prove:
   beyond TTL, block their lane and refuse release, cancellation without
   evidence and repeated sends; verified non-delivery can still be
   returned to pending through token-checked `--send-failed`; a missing send
-  command leaves the item claimed). The pending-expiry regressions live here too: intake classification
-  (owner/command/mention stay requests; a bot's plain post is conversation; replies, other-participant mentions,
-  question/ask markers and correction/cancellation markers are protected; only a plain unaddressed statement
-  expires), the operator purge and its dry run, expired entries filtered out of later wake context, non-finite
-  TTL input rejected before any mutation, stale sends refused with the claim preserved, and the operator
-  `--allow-stale` reassessment send (recorded on the item; a wrong token is still refused).
+  command leaves the item claimed). The pending-expiry regressions
+  cover protected owner messages, commands, replies, mentions, requests
+  and corrections; exact standalone greeting allowlist classification;
+  active work in the same chat protecting greetings; unknown and
+  ambiguous text remaining protected;
+  the operator purge and its dry run; expired entries filtered out of
+  later wake context; non-finite TTL input rejected before any mutation;
+  and stale sends refused with the item and claim token preserved,
+  without an API or CLI override.
 
 ## Migration from the legacy poll.py
 

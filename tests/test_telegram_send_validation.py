@@ -55,9 +55,6 @@ class TelegramSendValidationTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True, "message_id": "777"})
         sender.assert_called_once_with("/fake/sender", 123456789, "approved reply")
         self.assertEqual(self.item()["status"], "sending")
-        # A send inside the age guard is no override: nothing is
-        # recorded on the item.
-        self.assertNotIn("stale_override", self.item())
 
     def test_malformed_queued_chat_refuses_even_if_argument_matches(self):
         with self.store.transaction() as state:
@@ -146,79 +143,38 @@ class TelegramSendValidationTests(unittest.TestCase):
         self.assertEqual(item["status"], "claimed")
         self.assertNotIn("done_reason", item)
 
-    def test_stale_override_sends_and_records_the_override(self):
-        """Reassessment path: after a "stale" refusal the operator
-        may deliberately send with the override. The send proceeds
-        under the full fence (sender invoked once, item moves to
-        "sending") and the item records stale_override for audit.
-        Without the override the same item stays refused and
-        records nothing."""
-        with self.store.transaction() as state:
-            queue_core.find_item(state, "telegram", 101)["received_at"] -= 7200
-        result, sender = self.fenced("123456789")
-        self.assertEqual(result, {"ok": False, "stage": "stale"})
-        sender.assert_not_called()
-        self.assertEqual(self.item()["status"], "claimed")
-        self.assertNotIn("stale_override", self.item())
-        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
-            with mock.patch.object(
-                telegram, "_run_send_command", return_value=("sent", "888")
-            ) as override_sender:
-                result = telegram.send_fenced(
-                    self.store, 101, self.token, "123456789",
-                    "reviewed reply", allow_stale=True,
+    def test_removed_stale_override_keyword_cannot_send(self):
+        before = self.store.load()
+        with mock.patch.object(telegram, "_run_send_command") as sender:
+            with self.assertRaises(TypeError):
+                telegram.send_fenced(
+                    self.store, 101, self.token, "123456789", "reply",
+                    allow_stale=True,
                 )
-        self.assertEqual(result, {"ok": True, "message_id": "888"})
-        override_sender.assert_called_once()
-        item = self.item()
-        self.assertEqual(item["status"], "sending")
-        self.assertIs(item["stale_override"], True)
-
-    def test_stale_override_with_wrong_token_is_still_refused(self):
-        """The override skips ONLY the age refusal: a caller that
-        does not own the claim gets the plain fence refusal, the
-        sender is never invoked, and no override is recorded."""
-        with self.store.transaction() as state:
-            queue_core.find_item(state, "telegram", 101)["received_at"] -= 7200
-        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
-            with mock.patch.object(telegram, "_run_send_command") as sender:
-                result = telegram.send_fenced(
-                    self.store, 101, "bogus-token", "123456789",
-                    "late reply", allow_stale=True,
-                )
-        self.assertEqual(result, {"ok": False, "stage": "fence"})
         sender.assert_not_called()
-        item = self.item()
-        self.assertEqual(item["status"], "claimed")
-        self.assertIsNone(item["sending_at"])
-        self.assertNotIn("stale_override", item)
+        self.assertEqual(self.store.load(), before)
 
-    def test_cli_allow_stale_sends_and_records_the_override(self):
-        """The CLI form: --send-fenced ... --allow-stale drives the
-        same reassessment path; an unknown trailing flag is a
-        usage error and sends nothing."""
+    def test_cli_removed_override_and_bad_arity_never_fetch_or_send(self):
         with self.store.transaction() as state:
             queue_core.find_item(state, "telegram", 101)["received_at"] -= 7200
-        with mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"}):
-            with mock.patch.object(
-                telegram, "_run_send_command", return_value=("sent", "777")
-            ) as sender:
-                out = io.StringIO()
-                with mock.patch("sys.stdin", io.StringIO("reviewed reply")):
-                    with redirect_stdout(out):
-                        rc = telegram.main(
-                            ["--send-fenced", "101", self.token,
-                             "123456789", "--allow-stale"],
-                            path=self.path,
-                        )
-        self.assertEqual(rc, 0)
-        self.assertEqual(
-            json.loads(out.getvalue()), {"ok": True, "message_id": "777"}
-        )
-        sender.assert_called_once()
-        item = self.item()
-        self.assertEqual(item["status"], "sending")
-        self.assertIs(item["stale_override"], True)
+        before = self.store.load()
+        env = mock.patch.dict(os.environ, {telegram.SEND_CMD_ENV: "/fake/sender"})
+        env.start()
+        self.addCleanup(env.stop)
+        base = ["--send-fenced", "101", self.token, "123456789"]
+        for args in (base + ["--allow-stale"], base[:-1],
+                     base + ["--allow-stale", "extra"]):
+            with self.subTest(args=args):
+                output = io.StringIO()
+                with mock.patch.object(telegram, "_run_send_command") as sender:
+                    fetch = mock.Mock(side_effect=AssertionError("must not poll"))
+                    with redirect_stdout(output):
+                        rc = telegram.main(args, path=self.path, fetch=fetch)
+                self.assertEqual(rc, 2)
+                self.assertFalse(json.loads(output.getvalue())["ok"])
+                sender.assert_not_called()
+                fetch.assert_not_called()
+                self.assertEqual(self.store.load(), before)
 
     def test_cli_send_fenced_rejects_unknown_trailing_flag(self):
         out = io.StringIO()

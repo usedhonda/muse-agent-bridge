@@ -634,10 +634,7 @@ class PurgeExpiredTests(unittest.TestCase):
 
 
 class IntakeClassificationTests(unittest.TestCase):
-    """Finding 2 regression: classification is decided at intake
-    by evidence of being addressed — the sender is the owner, the
-    text is a bot command, or it mentions the bot — never by chat
-    type and never by the sender being a bot."""
+    """Classification protects owner/addressed/unknown input at intake."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -659,8 +656,7 @@ class IntakeClassificationTests(unittest.TestCase):
                 # The owner's group message adopts the group; the
                 # sender being the owner makes it a request.
                 msg_update(1, GROUP, "group", OWNER, "opening the room"),
-                # A bot's plain post: conversation. Sender being a
-                # bot does not decide the class either way.
+                # A bot's unfamiliar statement stays protected.
                 msg_update(2, GROUP, "group", 222, "plain agent chatter",
                            "kai_bot", True),
                 # A mention of the bot (any case) is a request.
@@ -680,7 +676,7 @@ class IntakeClassificationTests(unittest.TestCase):
             self.classes(),
             {
                 "1": queue_core.CLASS_REQUEST,
-                "2": queue_core.CLASS_CONVERSATION,
+                "2": queue_core.CLASS_REQUEST,
                 "3": queue_core.CLASS_REQUEST,
                 "4": queue_core.CLASS_REQUEST,
                 "5": queue_core.CLASS_REQUEST,
@@ -690,14 +686,7 @@ class IntakeClassificationTests(unittest.TestCase):
 
 
 class IntakeProtectionClassificationTests(unittest.TestCase):
-    """Re-review regression (classification): ambiguous input
-    defaults to protected. A reply, a mention of ANY participant,
-    a question/ask marker, or a correction/cancellation marker
-    each make a group message "request" — only a plain
-    unaddressed statement with no protection signal at all is
-    "conversation" and expiry-eligible. Protecting these cases
-    keeps their content available as follow-ups; it does not
-    treat the content as new authorization."""
+    """Only positive greetings in an idle lane may expire; unknown work survives."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -719,7 +708,7 @@ class IntakeProtectionClassificationTests(unittest.TestCase):
             i for i in state["queue"] if i["external_id"] == str(external_id)
         )
 
-    def test_protection_signals_and_only_plain_talk_expires(self):
+    def test_protection_signals_and_unknown_talk_survive_purge(self):
         # Poll 1 claims the owner's opening message, so poll 2's
         # arrivals stay pending for the purge below.
         first = run_cli(
@@ -748,8 +737,7 @@ class IntakeProtectionClassificationTests(unittest.TestCase):
             # A request marker ("tell me").
             msg_update(7, GROUP, "group", 222, "あとで結果を教えて",
                        "kai_bot", True),
-            # The one plain unaddressed statement: no signal at
-            # all — positively ordinary conversation.
+            # A plain statement is not evidence of ordinary talk.
             msg_update(8, GROUP, "group", 222, "今日のメモをここに置いておく",
                        "kai_bot", True),
         ]
@@ -766,7 +754,7 @@ class IntakeProtectionClassificationTests(unittest.TestCase):
                 "5": queue_core.CLASS_REQUEST,
                 "6": queue_core.CLASS_REQUEST,
                 "7": queue_core.CLASS_REQUEST,
-                "8": queue_core.CLASS_CONVERSATION,
+                "8": queue_core.CLASS_REQUEST,
             },
         )
         # A legacy record with no classification is protected too.
@@ -788,13 +776,84 @@ class IntakeProtectionClassificationTests(unittest.TestCase):
             {"ok": True},
         )
         result = run_cli(self.path, ["--purge-expired"])
-        self.assertEqual(result["expired"], 1)
-        self.assertEqual(result["external_ids"], ["8"])
-        self.assertEqual(self.item(8)["status"], "done")
-        self.assertEqual(self.item(8)["done_reason"], "expired")
-        for uid in range(2, 8):
+        self.assertEqual(result["expired"], 0)
+        self.assertEqual(result["external_ids"], [])
+        for uid in range(2, 9):
             self.assertEqual(self.item(uid)["status"], "pending")
         self.assertEqual(self.item("legacy-1")["status"], "pending")
+
+    def test_exact_greetings_only_and_protection_overrides(self):
+        for text in ("hello", "  HELLO  ", "こんにちは", "こんばんは"):
+            with self.subTest(text=text):
+                self.assertEqual(telegram.classify_message(
+                    text, sender_is_owner=False), queue_core.CLASS_CONVERSATION)
+                for signal in ({"sender_is_owner": True}, {"is_reply": True},
+                               {"has_active_work": True}):
+                    options = {"sender_is_owner": False, **signal}
+                    self.assertEqual(telegram.classify_message(text, **options),
+                                     queue_core.CLASS_REQUEST)
+        # Unseen expressions and greeting prefixes cannot inherit eligibility.
+        for text in ("その処理は保留", "対象をBに変更", "Please stop the job",
+                     "Switch to the second target", "Wait for the green light",
+                     "それは後回し", "Proceed with option C", "OK", "thanks",
+                     "hello; pause the task", "hello\nuse B", "hi?", "", "🛑"):
+            with self.subTest(text=text):
+                self.assertEqual(telegram.classify_message(
+                    text, sender_is_owner=False), queue_core.CLASS_REQUEST)
+
+    def test_unknown_intake_survives_purge_and_claim_sweep(self):
+        texts = ["その処理は保留", "対象をBに変更", "Please stop the job",
+                 "Switch to the second target", "Wait for the green light"]
+        store = JsonStateStore(self.path)
+        with store.transaction() as state:
+            state["group_id"] = GROUP
+            telegram.ingest(state, {"ok": True, "result": [
+                msg_update(uid, GROUP, "group", 222, text)
+                for uid, text in enumerate(texts, 20)
+            ]})
+            for item in state["queue"]:
+                item["received_at"] -= 7200
+        self.assertTrue(all(c == queue_core.CLASS_REQUEST
+                            for c in self.classes().values()))
+        self.assertEqual(run_cli(self.path, ["--purge-expired"])["expired"], 0)
+        payload = run_cli(self.path, [])
+        self.assertEqual([item["text"] for item in payload["items"]], texts)
+        self.assertTrue(all(item["status"] == "claimed"
+                            for item in store.load()["queue"]))
+
+    def test_idle_greeting_expires_but_active_work_greeting_survives(self):
+        store = JsonStateStore(self.path)
+        for work_class in (queue_core.CLASS_REQUEST, None,
+                           queue_core.CLASS_CONVERSATION):
+            with self.subTest(work_class=work_class):
+                with store.transaction() as state:
+                    state["queue"] = []
+                    state["group_id"] = GROUP
+                    queue_core.enqueue(
+                        state, platform="telegram", external_id=90,
+                        chat_id=GROUP, chat_type="group", text="work",
+                        item_class=work_class)
+                    # Even previously claimed ordinary talk is active work.
+                    if work_class == queue_core.CLASS_CONVERSATION:
+                        queue_core.claim_batch(state, platform="telegram")
+                    telegram.ingest(state, {"ok": True, "result": [
+                        msg_update(91, GROUP, "group", 222, "hello")
+                    ]})
+                    queue_core.find_item(state, "telegram", 91)["received_at"] -= 7200
+                self.assertEqual(self.item(91)["item_class"], queue_core.CLASS_REQUEST)
+                self.assertEqual(run_cli(self.path, ["--purge-expired"])["expired"], 0)
+        with store.transaction() as state:
+            for item in state["queue"]:
+                item["status"] = queue_core.DONE
+            # Work in a different chat does not block idle-room greetings.
+            queue_core.enqueue(state, platform="telegram", external_id=92,
+                               chat_id=OWNER, text="other lane work")
+            telegram.ingest(state, {"ok": True, "result": [
+                msg_update(93, GROUP, "group", 222, "hello")
+            ]})
+            queue_core.find_item(state, "telegram", 93)["received_at"] -= 7200
+        self.assertEqual(self.item(93)["item_class"], queue_core.CLASS_CONVERSATION)
+        self.assertEqual(run_cli(self.path, ["--purge-expired"])["external_ids"], ["93"])
 
 
 class ExpiredContextTests(unittest.TestCase):
@@ -818,8 +877,7 @@ class ExpiredContextTests(unittest.TestCase):
         )
 
     def test_expired_item_is_absent_from_later_wake_context(self):
-        # Poll 1 claims the owner's opening message (batch in
-        # flight), so poll 2's arrivals stay pending.
+        # Finish the opener, then ingest ordinary talk without claiming it.
         first = run_cli(
             self.path, [],
             fetch=FakeFetch(
@@ -827,23 +885,17 @@ class ExpiredContextTests(unittest.TestCase):
             ),
         )
         self.assertIsNotNone(first)
-        blocked = run_cli(
-            self.path, [],
-            fetch=FakeFetch(
-                [
-                    msg_update(11, GROUP, "group", 222, "stale chatter",
-                               "kai_bot", True),
-                    msg_update(12, GROUP, "group", 222, "kept chatter",
-                               "kai_bot", True),
-                ]
-            ),
-        )
-        self.assertIsNone(blocked)
+        run_cli(self.path, ["--done", "10", first["claim_token"]])
+        with JsonStateStore(self.path).transaction() as state:
+            telegram.ingest(state, {"ok": True, "result": [
+                msg_update(11, GROUP, "group", 222, "こんにちは", "kai_bot", True),
+                msg_update(12, GROUP, "group", 222, "こんばんは", "kai_bot", True),
+            ]})
         # Buffer entries are tied to their queue records.
         state = JsonStateStore(self.path).load()
         by_text = {e["text"]: e for e in state["group_buffer"]}
-        self.assertEqual(by_text["stale chatter"]["external_id"], "11")
-        self.assertEqual(by_text["kept chatter"]["external_id"], "12")
+        self.assertEqual(by_text["こんにちは"]["external_id"], "11")
+        self.assertEqual(by_text["こんばんは"]["external_id"], "12")
         # Age only the first arrival, then purge: it expires; the
         # fresh one stays pending.
         store = JsonStateStore(self.path)
@@ -857,12 +909,7 @@ class ExpiredContextTests(unittest.TestCase):
         self.assertEqual(self.item(11)["status"], "done")
         self.assertEqual(self.item(11)["done_reason"], "expired")
         self.assertEqual(self.item(12)["status"], "pending")
-        # Close the first batch and poll a fresh arrival: its wake
-        # context keeps the live entries and drops the expired one.
-        self.assertEqual(
-            run_cli(self.path, ["--done", "10", first["claim_token"]]),
-            {"ok": True},
-        )
+        # A fresh arrival's wake keeps live context and drops expired talk.
         payload = run_cli(
             self.path, [],
             fetch=FakeFetch(
@@ -873,9 +920,9 @@ class ExpiredContextTests(unittest.TestCase):
         for view in payload["items"]:
             texts = [entry["text"] for entry in view["context"]]
             self.assertIn("room open", texts)
-            self.assertIn("kept chatter", texts)
+            self.assertIn("こんばんは", texts)
             self.assertIn("fresh question", texts)
-            self.assertNotIn("stale chatter", texts)
+            self.assertNotIn("こんにちは", texts)
 
 
 class NumericInputValidationTests(unittest.TestCase):
