@@ -33,7 +33,11 @@ Keeps the operational interface the wake hook drives:
                            "fence"} when the fence refuses (nothing
                            is sent), and {"ok": false, "stage":
                            "config"} when the send command is not
-                           configured (item stays claimed)
+                           configured (item stays claimed), and
+                           {"ok": false, "stage": "input"} for empty or
+                           oversized reply text. A destination other
+                           than the chat recorded at intake is refused
+                           without sending.
   --done ID [TOKEN] [REASON] [EVIDENCE]
                            mark a claimed or sending item done; the
                            optional REASON (one short word, e.g.
@@ -346,15 +350,29 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
     - unknown → the item stays in "sending" (send-unknown) for
       operator reconciliation; it is never resent automatically.
     """
+    # Refuse invalid text before reserving the send. Telegram sendMessage
+    # accepts 1-4096 characters, and a rejected empty/oversized reply must
+    # never strand an otherwise valid claim in an ambiguous "sending" state.
+    if not isinstance(text, str) or not text.strip() or len(text) > 4096:
+        return {"ok": False, "stage": "input"}
     send_cmd = os.environ.get(SEND_CMD_ENV)
     if not send_cmd:
         return {"ok": False, "stage": "config"}
     with store.transaction() as state:
         _ensure_adapter_state(state)
+        item = queue_core.find_item(state, PLATFORM, target)
+        # The model/dispatcher controls argv, but not the intended recipient.
+        # Bind the requested chat to the durable intake record *inside* the
+        # same transaction as the claim fence, before any external send.
+        queued_chat_id = item.get("chat_id") if item is not None else None
+        if type(queued_chat_id) is not int or str(queued_chat_id) != str(chat_id):
+            return {"ok": False, "stage": "fence"}
         fenced = queue_core.mark_sending(state, PLATFORM, target, token)
     if not fenced:
         return {"ok": False, "stage": "fence"}
-    outcome, message_id = _run_send_command(send_cmd, chat_id, text)
+    # Never trust the caller's destination, even after comparison. Only
+    # the queue's persisted chat ID may reach the sender subprocess.
+    outcome, message_id = _run_send_command(send_cmd, queued_chat_id, text)
     if outcome == "sent":
         return {"ok": True, "message_id": message_id}
     if outcome == "failed":
