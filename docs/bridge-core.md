@@ -91,7 +91,7 @@ Every mutation runs as one transaction:
 - **Stale recycle is narrow:** only *unreplied* `claimed` items
   older than the TTL (default 1800s) return to pending, so a wake
   turn that died before sending does not block the queue forever,
-  while a slow turn is never raced by a second claim.
+  while a slow turn is not raced by a second claim; this does not guarantee stopping an old executor.
 - Every item records `received_at`, `claimed_at`, `sending_at` and
   `replied_at`, so intake latency can be measured end to end.
 

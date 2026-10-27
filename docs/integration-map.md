@@ -4,8 +4,8 @@ This branch (`integration/core-pr4-20261025`) is a **union merge** of the
 Slack-side PR #4 line (`bridge/`: listener, poller, worker, recovery) and
 the platform-common core line (`bridge_core/`: store, queue, Telegram
 adapter). Both packages are present in full and all tests from both lines
-pass together (154 tests: 116 Slack-side + 102 core-side − 64 shared
-base tests).
+pass together (155 tests: 116 Slack-side + 102 core-side − 64 shared
+base tests, plus 1 lane-fix regression test).
 
 It is **not yet a unification**. No code is shared between the two
 packages: `bridge/` still runs its own store and queue, and
@@ -41,7 +41,7 @@ engines side by side (one per platform), with incompatible formats.
 | Lane key | `(scope, audience_id, channel, conversation_ts)` — one active job per conversation; later events wait | `(platform, chat_id)` — one batch in flight per lane. Lane selection skips busy lanes, so a free lane stays claimable even when the oldest pending item sits in a busy lane; a lane is blocked only by its own in-flight batch |
 | Claim credential | The claim row itself plus a digest of record + `claimed_at`; context refresh and reply verify the digest is unchanged | One random token per batch; every transition (`mark_sending`, `mark_replied`, `mark_done`, `release`, `mark_send_failed`) requires the matching token |
 | TTL | `CLAIM_TTL_SECONDS = 900` is **diagnostic only**. A claim is never reclaimed by age; `status` reports `stale_claimed` and an operator must `resume`, `release` (confirmed-not-started only), or `reconcile` deliberately | `DEFAULT_STALE_TTL = 1800` **does** recycle: an unreplied `claimed` item older than the TTL returns to pending and its old token stops matching, so a stale turn's late calls are rejected |
-| Send discipline | `reply` first persists status `sending` (with the reply text), posts outside the locks, then marks `done`. A fresh (60 s) context receipt from an exact-claim refresh is required before posting. If the outcome is uncertain the job stays `sending` until an operator reconciles it (`--sent-ts` / `--confirmed-not-sent`) | The adapter's send fence persists `mark_sending` before the platform call and records the outcome (`mark_replied` / `mark_send_failed` on definitive rejection). `sending` items are never recycled; closing one without a reply record requires reconciliation `evidence` |
+| Send discipline | `reply` first persists status `sending` (with the reply text), posts outside the locks, then marks `done`. A fresh (60 s) context receipt from an exact-claim refresh is required before posting. If the outcome is uncertain the job stays `sending` until an operator reconciles it (`--sent-ts` / `--confirmed-not-sent`) | The adapter's send fence persists `mark_sending` before the platform call and records the outcome (`mark_replied` / `mark_send_failed` on definitive rejection). A fenced send leaves the item in `sending`; the runtime `--replied` → `--done` step is a handover condition, since send success alone does not close the item. `sending` items are never recycled; closing one without a reply record requires reconciliation `evidence` |
 | Duplicate-send guard | `reply` refuses if another job with the same `(channel, ts)` is already `sending` or `done` | An item with `replied_at` set can never be claimed, released, send-failed, or recycled again |
 
 The shared philosophy: an uncertain send outcome is an operator
