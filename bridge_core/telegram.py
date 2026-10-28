@@ -33,9 +33,14 @@ Keeps the operational interface the wake hook drives:
                            "config"} when the send command is not
                            configured (item stays claimed), and
                            {"ok": false, "stage": "input"} for empty or
-                           oversized reply text. A destination other
-                           than the chat recorded at intake is refused
-                           without sending.
+                           oversized reply text, and {"ok": false,
+                           "stage": "stale"} when the item is older
+                           than the maximum reply age — the fence then
+                           refuses without sending and leaves the item
+                           claimed, preserved for reassessment; the
+                           fence never closes claimed work. A
+                           destination other than the chat recorded
+                           at intake is refused without sending.
   --done ID [TOKEN] [REASON] [EVIDENCE]
                            mark a claimed or sending item done; the
                            optional REASON (one short word, e.g.
@@ -56,6 +61,17 @@ Keeps the operational interface the wake hook drives:
   --send-failed ID TOKEN   return a "sending" item to pending — ONLY
                            when the Bot API definitively rejected the
                            send (the reply provably did not go out)
+  --purge-expired [--older-than SECONDS] [--dry-run]
+                           operator purge: run the pending-expiry
+                           sweep on demand (the same sweep claiming
+                           performs) and print JSON counts plus the
+                           expired items' ids. --older-than overrides
+                           the group TTL for this run; private (owner
+                           DM) items keep their configured TTL —
+                           never, by default — so a purge cannot
+                           silently drop the owner's own asks.
+                           --dry-run reports what would expire and
+                           changes nothing
   --adopt ID   bind a positive owner ID once (main agent/operator only).
                The same ID is idempotent; changing an established owner is
                refused and requires deliberate, offline state migration.
@@ -70,7 +86,18 @@ queue plus this adapter's keys (``offset``, ``owner_id``, ``group_id``,
 ``group_buffer``, ``candidates``, ``candidate_groups``). The state path
 is ``$TELEGRAM_BRIDGE_STATE_PATH`` or ``state.json`` beside this file.
 Batch size and stale TTL can be tuned with ``$TELEGRAM_BRIDGE_BATCH_SIZE``
-and ``$TELEGRAM_BRIDGE_STALE_TTL`` (seconds).
+and ``$TELEGRAM_BRIDGE_STALE_TTL`` (seconds). The pending-expiry sweep
+and the fence's stale guard are tuned with
+``$TELEGRAM_BRIDGE_GROUP_PENDING_TTL`` (default 600),
+``$TELEGRAM_BRIDGE_PRIVATE_PENDING_TTL`` (unset: owner DMs never
+expire) and ``$TELEGRAM_BRIDGE_MAX_REPLY_AGE`` (default 1800);
+a negative value disables the limit it tunes.
+
+At intake every message is classified (see ``classify_message``):
+only complete greetings from ``ORDINARY_CONVERSATION_TEXTS`` with no
+protection signal or active work in the same chat can expire. Unknown
+expressions are protected "request" records, including unmentioned work
+follow-ups. The marker lists are additional protection, not eligibility.
 
 The wake payload carries every claimed item under ``"items"`` plus the
 batch ``claim_token``; for compatibility the first item's fields are
@@ -79,7 +106,9 @@ also present at the top level, exactly as the single-item payload did.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -104,6 +133,80 @@ SEND_CMD_ENV = "TELEGRAM_BRIDGE_SEND_CMD"
 #: outcome is classified as unknown (the send may have gone out).
 SEND_TIMEOUT_SECONDS = 30.0
 
+#: Environment variables tuning the pending-expiry sweep (claim-time
+#: and --purge-expired) and the send fence's stale guard, in seconds.
+#: The group TTL defaults to queue_core.DEFAULT_GROUP_PENDING_TTL;
+#: the private TTL is unset (owner DMs never expire) by default; the
+#: maximum reply age defaults to DEFAULT_MAX_REPLY_AGE. A negative
+#: value disables the limit it tunes.
+GROUP_PENDING_TTL_ENV = "TELEGRAM_BRIDGE_GROUP_PENDING_TTL"
+PRIVATE_PENDING_TTL_ENV = "TELEGRAM_BRIDGE_PRIVATE_PENDING_TTL"
+MAX_REPLY_AGE_ENV = "TELEGRAM_BRIDGE_MAX_REPLY_AGE"
+
+#: Default maximum age (seconds since intake) at which the send
+#: fence still sends a queue reply. Past it, the fence refuses with
+#: stage "stale" and leaves the item claimed: the conversation has
+#: moved on, so the reply would land off-context, but claimed work
+#: is never closed by the fence — it is preserved for reassessment
+#: (a fresh claim, an operator close, or a later send decision).
+#: Operator posts that do not come from the queue never pass
+#: through the fence and are unaffected.
+DEFAULT_MAX_REPLY_AGE = 1800.0
+
+#: Environment variable naming this deployment's bot username, used
+#: by the intake classifier to recognise messages addressed to the
+#: bot. Telegram usernames are case-insensitive; a leading "@" in
+#: the value is ignored.
+BOT_USERNAME_ENV = "TELEGRAM_BRIDGE_BOT_USERNAME"
+DEFAULT_BOT_USERNAME = "usedhonda_muse_bot"
+
+#: An "@username" mention anywhere in the text. ANY mention — of
+#: this bot, of another agent, of the owner — is a protection
+#: signal for the intake classifier: a message that addresses
+#: someone is work for a specific reader, not room chatter. The
+#: pattern also matches the local part of an address-like string;
+#: over-protecting is the safe direction here.
+MENTION_RE = re.compile(r"@[A-Za-z0-9_]{3,}")
+
+#: Question / request markers for the intake classifier. A text
+#: carrying any of these is protected ("request" class): a
+#: question or an ask must never be swept as chatter, even when it
+#: mentions nobody. The list is deliberately small and lives ONLY
+#: here; extend it in this one place.
+QUESTION_REQUEST_MARKERS = (
+    "?",
+    "？",
+    "ください",
+    "お願い",
+    "してほしい",
+    "教えて",
+)
+
+#: Correction / cancellation markers for the intake classifier. A
+#: text carrying any of these is protected ("request" class): a
+#: correction or cancellation changes earlier work, so expiring it
+#: would silently drop the change. Same rule as above: small, and
+#: kept in this single list.
+CORRECTION_MARKERS = (
+    "やめる",
+    "やめて",
+    "中止",
+    "取消",
+    "キャンセル",
+    "訂正",
+    "間違",
+    "取り消し",
+    "やっぱりなし",
+)
+
+# Positive eligibility is deliberately narrow: exact standalone greetings,
+# never arbitrary text with no known work markers. Do not add acknowledgements
+# such as "OK" or "thanks": they can decide or close ongoing work.
+ORDINARY_CONVERSATION_TEXTS = frozenset({
+    "hello", "hi", "good morning", "good evening",
+    "こんにちは", "おはよう", "おはようございます", "こんばんは",
+})
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -117,6 +220,82 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, "") or default)
     except ValueError:
         return default
+
+
+def _env_seconds(name: str, default):
+    """Float seconds from the environment; ``default`` when unset or
+    invalid. A negative value resolves to None — the limit it tunes
+    is disabled. A non-finite value (NaN, infinities — ``float()``
+    parses "nan"/"inf" successfully) is invalid, not a limit: it
+    resolves to ``default`` too, before it can reach any mutation.
+    """
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(value):
+        return default
+    return None if value < 0 else value
+
+
+def _bot_username() -> str:
+    raw = os.environ.get(BOT_USERNAME_ENV, "") or DEFAULT_BOT_USERNAME
+    return raw.strip().lstrip("@").lower()
+
+
+def classify_message(
+    text: str,
+    *,
+    sender_is_owner: bool,
+    bot_username: str = "",
+    is_reply: bool = False,
+    has_active_work: bool = False,
+) -> str:
+    """Protect unknown input; positively identify only standalone greetings.
+
+    Owner messages, replies, addressed messages, known work signals and any
+    unfinished work in the chat override greeting eligibility. Matching uses
+    only whitespace trimming and case folding: extra clauses, punctuation or
+    unfamiliar expressions remain protected rather than guessed to be chatter.
+    Bot and human messages follow the same rules.
+    """
+    if has_active_work:
+        return queue_core.CLASS_REQUEST
+    if sender_is_owner:
+        return queue_core.CLASS_REQUEST
+    if text.lstrip().startswith("/"):
+        return queue_core.CLASS_REQUEST
+    if is_reply:
+        return queue_core.CLASS_REQUEST
+    if MENTION_RE.search(text):
+        return queue_core.CLASS_REQUEST
+    if bot_username and ("@" + bot_username) in text.lower():
+        return queue_core.CLASS_REQUEST
+    if any(marker in text for marker in QUESTION_REQUEST_MARKERS):
+        return queue_core.CLASS_REQUEST
+    if any(marker in text for marker in CORRECTION_MARKERS):
+        return queue_core.CLASS_REQUEST
+    if text.strip().casefold() in ORDINARY_CONVERSATION_TEXTS:
+        return queue_core.CLASS_CONVERSATION
+    return queue_core.CLASS_REQUEST
+
+
+def _expiry_ttls() -> tuple:
+    """(group_ttl, private_ttl) for the pending-expiry sweep."""
+    return (
+        _env_seconds(
+            GROUP_PENDING_TTL_ENV, queue_core.DEFAULT_GROUP_PENDING_TTL
+        ),
+        _env_seconds(PRIVATE_PENDING_TTL_ENV, None),
+    )
+
+
+def _max_reply_age():
+    """The send fence's maximum reply age, from the environment."""
+    return _env_seconds(MAX_REPLY_AGE_ENV, DEFAULT_MAX_REPLY_AGE)
 
 
 def api(method: str, params: dict, timeout: float = 20.0) -> dict:
@@ -201,6 +380,32 @@ def ingest(state: dict, result: dict) -> None:
                 state["candidates"].append(sender_id)
             continue
 
+        item_class = classify_message(
+            text,
+            sender_is_owner=sender_id == state["owner_id"],
+            bot_username=_bot_username(),
+            # Even a greeting can be a follow-up when work is unfinished.
+            # Legacy/unclassified records are work too. Completed records
+            # and never-claimed ordinary talk do not make a lane active.
+            has_active_work=any(
+                item.get("platform") == PLATFORM
+                and item.get("chat_id") == chat.get("id")
+                and item.get("status") != queue_core.DONE
+                and (
+                    item.get("item_class") != queue_core.CLASS_CONVERSATION
+                    or item.get("ever_claimed")
+                    or item.get("status") in queue_core.IN_FLIGHT
+                )
+                for item in state["queue"]
+            ),
+            # A reply is a follow-up to earlier work: protected,
+            # whoever sent it (see classify_message).
+            is_reply=bool(
+                message.get("reply_to_message")
+                or message.get("reply_to_message_id")
+            ),
+        )
+
         if chat_type == "private":
             if sender_id == state["owner_id"]:
                 queue_core.enqueue(
@@ -214,6 +419,7 @@ def ingest(state: dict, result: dict) -> None:
                     is_bot=bool(sender.get("is_bot")),
                     text=text,
                     date=message.get("date"),
+                    item_class=item_class,
                 )
             continue
 
@@ -225,6 +431,7 @@ def ingest(state: dict, result: dict) -> None:
                 continue
             state["group_buffer"].append(
                 {
+                    "external_id": str(update["update_id"]),
                     "sender_name": sender_label(sender),
                     "is_bot": bool(sender.get("is_bot")),
                     "text": text,
@@ -243,10 +450,22 @@ def ingest(state: dict, result: dict) -> None:
                 is_bot=bool(sender.get("is_bot")),
                 text=text,
                 date=message.get("date"),
+                item_class=item_class,
             )
 
 
-def _payload_item(state: dict, item: dict) -> dict:
+def _expired_external_ids(state: dict) -> set:
+    """External ids of this platform's expired queue records."""
+    return {
+        item["external_id"]
+        for item in state.get("queue", [])
+        if item["platform"] == PLATFORM
+        and item["status"] == queue_core.DONE
+        and item.get("done_reason") == queue_core.EXPIRED_REASON
+    }
+
+
+def _payload_item(state: dict, item: dict, expired_ids: set) -> dict:
     view = {
         "update_id": int(item["external_id"]),
         "chat_id": item["chat_id"],
@@ -256,7 +475,19 @@ def _payload_item(state: dict, item: dict) -> dict:
         "text": item["text"],
     }
     if item["chat_type"] in ("group", "supergroup"):
-        view["context"] = state["group_buffer"][-CONTEXT_TAIL:]
+        # Expired work is closed precisely so that no turn acts on
+        # it: buffer entries tied to an expired record are excluded
+        # from the actionable context of later wakes, so an expired
+        # request cannot re-enter through a fresh item's context
+        # and bypass that item's own age guard. Entries with no
+        # record link (legacy buffer entries) are kept — they
+        # cannot be tied to expired work.
+        context = [
+            entry
+            for entry in state["group_buffer"]
+            if str(entry.get("external_id")) not in expired_ids
+        ]
+        view["context"] = context[-CONTEXT_TAIL:]
     return view
 
 
@@ -271,7 +502,10 @@ def build_payload(state: dict, batch: dict) -> dict:
                 f"refusing to shape a {item['platform']!r} item "
                 "into a Telegram payload"
             )
-    items = [_payload_item(state, item) for item in batch["items"]]
+    expired_ids = _expired_external_ids(state)
+    items = [
+        _payload_item(state, item, expired_ids) for item in batch["items"]
+    ]
     payload = {
         "claim_token": batch["claim_token"],
         "count": len(items),
@@ -291,11 +525,17 @@ def run_once(store: JsonStateStore, fetch=fetch_updates) -> dict | None:
         raise RuntimeError(f"getUpdates failed: {result.get('description')}")
     batch_size = _env_int("TELEGRAM_BRIDGE_BATCH_SIZE", queue_core.DEFAULT_BATCH_SIZE)
     stale_ttl = float(_env_int("TELEGRAM_BRIDGE_STALE_TTL", int(queue_core.DEFAULT_STALE_TTL)))
+    group_ttl, private_ttl = _expiry_ttls()
     with store.transaction() as state:
         _ensure_adapter_state(state)
         ingest(state, result)
         batch = queue_core.claim_batch(
-            state, platform=PLATFORM, batch_size=batch_size, stale_ttl=stale_ttl
+            state,
+            platform=PLATFORM,
+            batch_size=batch_size,
+            stale_ttl=stale_ttl,
+            group_pending_ttl=group_ttl,
+            private_pending_ttl=private_ttl,
         )
         payload = build_payload(state, batch) if batch else None
     return payload
@@ -337,7 +577,16 @@ def _run_send_command(send_cmd: str, chat_id, text: str):
     return "sent", lines[-1]
 
 
-def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -> dict:
+def send_fenced(
+    store: JsonStateStore,
+    target: int,
+    token,
+    chat_id,
+    text: str,
+    *,
+    max_reply_age: float | None = DEFAULT_MAX_REPLY_AGE,
+    now: float | None = None,
+) -> dict:
     """Send one queue reply under the send fence.
 
     Order is the whole point: configuration is checked first (an
@@ -353,11 +602,28 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
       operator reconciliation; it is never resent automatically.
       Only independently verified non-delivery permits an operator
       to return it to pending with --send-failed.
+    - stale → the item is older than ``max_reply_age`` (seconds
+      since intake; None disables the guard) and has no recorded
+      reply. The fence refuses BEFORE marking "sending" or running
+      the send command — and changes nothing: the item stays
+      claimed, with its claim token intact, preserved for
+      reassessment. The fence never closes claimed work, whatever
+      its class. Re-claiming does not change intake time or bypass
+      the age guard. A caller that does not own the claim gets the
+      plain fence refusal instead, stale or not.
     """
     # Refuse invalid text before reserving the send. Telegram sendMessage
     # accepts 1-4096 characters, and a rejected empty/oversized reply must
     # never strand an otherwise valid claim in an ambiguous "sending" state.
     if not isinstance(text, str) or not text.strip() or len(text) > 4096:
+        return {"ok": False, "stage": "input"}
+    # A non-finite age limit is a configuration error, not a limit:
+    # refuse before any state is touched (NaN would disable the
+    # guard silently; an infinite limit likewise; a negative
+    # infinity would refuse every send). The environment layer
+    # already maps such values back to the default; this guards
+    # direct callers.
+    if max_reply_age is not None and not math.isfinite(max_reply_age):
         return {"ok": False, "stage": "input"}
     send_cmd = os.environ.get(SEND_CMD_ENV)
     if not send_cmd:
@@ -371,6 +637,26 @@ def send_fenced(store: JsonStateStore, target: int, token, chat_id, text: str) -
         queued_chat_id = item.get("chat_id") if item is not None else None
         if type(queued_chat_id) is not int or str(queued_chat_id) != str(chat_id):
             return {"ok": False, "stage": "fence"}
+        # The stale verdict belongs to the claim's owner alone: it
+        # requires the item claimed, the token matching, and no
+        # reply recorded — the same ownership the fence itself
+        # checks. A caller that does not own the claim falls
+        # through to mark_sending and gets the plain fence refusal.
+        stale_owned = (
+            max_reply_age is not None
+            and item is not None
+            and item["status"] == queue_core.CLAIMED
+            and token is not None
+            and item["claim_token"] == token
+            and item["replied_at"] is None
+            and (time.time() if now is None else now) - item["received_at"]
+            > max_reply_age
+        )
+        if stale_owned:
+            # Stale: refuse the send, preserve the work. No state
+            # changes in this transaction — the item stays claimed
+            # under the caller's own token for reassessment.
+            return {"ok": False, "stage": "stale"}
         fenced = queue_core.mark_sending(state, PLATFORM, target, token)
     if not fenced:
         return {"ok": False, "stage": "fence"}
@@ -425,11 +711,86 @@ def main(argv=None, *, fetch=fetch_updates, path: Path | None = None) -> int:
         print(json.dumps({"ok": ok}))
         return 0
 
-    if args[:1] == ["--send-fenced"] and len(args) == 4:
+    if args[:1] == ["--send-fenced"]:
+        if len(args) != 4:
+            print(json.dumps({
+                "ok": False,
+                "error": "usage: --send-fenced UPDATE_ID CLAIM_TOKEN CHAT_ID",
+            }))
+            return 2
         result = send_fenced(
-            store, int(args[1]), args[2], args[3], sys.stdin.read()
+            store,
+            int(args[1]),
+            args[2],
+            args[3],
+            sys.stdin.read(),
+            max_reply_age=_max_reply_age(),
         )
         print(json.dumps(result))
+        return 0
+
+    if args[:1] == ["--purge-expired"]:
+        older_than = None
+        dry_run = False
+        rest = args[1:]
+        index = 0
+        valid = True
+        while index < len(rest):
+            if rest[index] == "--dry-run":
+                dry_run = True
+                index += 1
+            elif rest[index] == "--older-than" and index + 1 < len(rest):
+                try:
+                    older_than = float(rest[index + 1])
+                except ValueError:
+                    valid = False
+                    break
+                # float() accepts "nan"/"inf"; a NaN threshold would
+                # expire every eligible item and an infinite one
+                # none. Both are input errors — reject them here,
+                # before any state is loaded or mutated.
+                if not math.isfinite(older_than):
+                    valid = False
+                    break
+                index += 2
+            else:
+                valid = False
+                break
+        if not valid:
+            print(json.dumps({
+                "ok": False,
+                "error": "usage: --purge-expired "
+                         "[--older-than SECONDS] [--dry-run]",
+            }))
+            return 2
+        group_ttl, private_ttl = _expiry_ttls()
+        if older_than is not None:
+            group_ttl = older_than
+        if dry_run:
+            # A dry run only reads: no transaction, no save.
+            state = _ensure_adapter_state(store.load())
+            expired = queue_core.expire_stale_pending(
+                state,
+                platform=PLATFORM,
+                group_ttl=group_ttl,
+                private_ttl=private_ttl,
+                dry_run=True,
+            )
+        else:
+            with store.transaction() as state:
+                _ensure_adapter_state(state)
+                expired = queue_core.expire_stale_pending(
+                    state,
+                    platform=PLATFORM,
+                    group_ttl=group_ttl,
+                    private_ttl=private_ttl,
+                )
+        print(json.dumps({
+            "ok": True,
+            "dry_run": dry_run,
+            "expired": len(expired),
+            "external_ids": [item["external_id"] for item in expired],
+        }))
         return 0
 
     if args[:1] == ["--replied"] and len(args) in (3, 4):
