@@ -1,0 +1,26 @@
+name: AI security review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  configuration:
+    name: AI review configuration
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Verify that the existing API credential is available here
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo 'API credential available in this repository; no inference was requested.'
+          else
+            echo '::error::API credential is not available in this repository. No AI review has run.'
+            exit 1
+          fi
