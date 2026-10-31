@@ -1,6 +1,7 @@
 name: Security checks
 
-# Standard GitHub checks: no OpenAI API key or other user secret is used.
+# Minimal pilot: CodeQL only. No OpenAI API key or other user secret is used.
+# Dependency Review is not enabled: this repo's dependency graph is disabled.
 on:
   pull_request:
     branches: [main]
@@ -37,20 +38,3 @@ jobs:
         uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           category: /language:python
-
-  dependency-review:
-    name: Dependency review
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      # The GitHub dependency diff API is sufficient; do not install PR packages.
-      - name: Check newly introduced vulnerable dependencies
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: high
-          license-check: false
-          comment-summary-in-pr: never
-          show-openssf-scorecard: false
